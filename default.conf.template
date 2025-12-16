@@ -2,6 +2,10 @@ server {
     listen 80;
     server_name _;
 
+    # DNS resolver для динамических upstream
+    resolver 8.8.8.8 8.8.4.4 valid=300s;
+    resolver_timeout 5s;
+
     # Health check для Coolify
     location /health {
         return 200 'OK';
@@ -13,8 +17,11 @@ server {
         rewrite ^/$ /index.html break;
         rewrite ^([^.]*)/$ $1/index.html break;
 
+        # Переменная для динамического proxy_pass (требует resolver)
+        set $minio_upstream "${MINIO_URL}/${BUCKET}/${SITE_PATH}";
+
         # Проксируем к MinIO
-        proxy_pass ${MINIO_URL}/${BUCKET}/${SITE_PATH}$uri;
+        proxy_pass $minio_upstream$uri;
         proxy_http_version 1.1;
 
         # Host header для MinIO
@@ -27,10 +34,6 @@ server {
         proxy_hide_header x-amz-request-id;
         proxy_hide_header x-amz-meta-server-side-encryption;
         proxy_hide_header x-amz-server-side-encryption;
-
-        # Кэширование
-        proxy_cache_valid 200 1h;
-        add_header X-Cache-Status $upstream_cache_status;
     }
 
     # Обработка ошибок
