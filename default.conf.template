@@ -1,0 +1,43 @@
+server {
+    listen 80;
+    server_name _;
+
+    # Health check для Coolify
+    location /health {
+        return 200 'OK';
+        add_header Content-Type text/plain;
+    }
+
+    location / {
+        # Автоматически добавляем index.html для директорий
+        rewrite ^/$ /index.html break;
+        rewrite ^([^.]*)/$ $1/index.html break;
+
+        # Проксируем к MinIO
+        proxy_pass ${MINIO_URL}/${BUCKET}/${SITE_PATH}$uri;
+        proxy_http_version 1.1;
+
+        # Host header для MinIO
+        proxy_set_header Host $proxy_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+        # Скрываем S3/MinIO заголовки
+        proxy_hide_header x-amz-id-2;
+        proxy_hide_header x-amz-request-id;
+        proxy_hide_header x-amz-meta-server-side-encryption;
+        proxy_hide_header x-amz-server-side-encryption;
+
+        # Кэширование
+        proxy_cache_valid 200 1h;
+        add_header X-Cache-Status $upstream_cache_status;
+    }
+
+    # Обработка ошибок
+    error_page 404 /404.html;
+    location = /404.html {
+        internal;
+        return 404 '<!DOCTYPE html><html><head><title>404</title></head><body><h1>Page Not Found</h1></body></html>';
+        add_header Content-Type text/html;
+    }
+}
