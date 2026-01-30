@@ -24,7 +24,33 @@ server {
 
     # Все остальные пути
     location / {
+        # Проверяем наличие файла, потом index.html в директории
         set $upstream ${MINIO_URL}/${BUCKET}/${SITE_PATH}$uri;
+
+        # Если путь заканчивается на / - добавляем index.html
+        if ($uri ~ "/$") {
+            set $upstream ${MINIO_URL}/${BUCKET}/${SITE_PATH}${uri}index.html;
+        }
+
+        # Если путь без расширения (директория) - пробуем добавить /index.html
+        if ($uri !~ "\.[a-zA-Z0-9]+$") {
+            set $try_index "${MINIO_URL}/${BUCKET}/${SITE_PATH}${uri}/index.html";
+        }
+
+        proxy_pass $upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $proxy_host;
+        proxy_hide_header x-amz-id-2;
+        proxy_hide_header x-amz-request-id;
+
+        # При 404 пробуем /index.html для директорий
+        proxy_intercept_errors on;
+        error_page 404 = @try_index;
+    }
+
+    # Fallback для директорий без trailing slash
+    location @try_index {
+        set $upstream ${MINIO_URL}/${BUCKET}/${SITE_PATH}$uri/index.html;
         proxy_pass $upstream;
         proxy_http_version 1.1;
         proxy_set_header Host $proxy_host;
