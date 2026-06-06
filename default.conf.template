@@ -6,6 +6,17 @@ server {
     resolver 127.0.0.11 valid=30s ipv6=off;
     resolver_timeout 5s;
 
+    # CORS wildcard для public static assets (icons, images, fonts) — preview
+    # iframe конструктора грузит SVG для mask-image и PNG/WEBP для Hero
+    # background с cross-origin (customize.merfy.ru ↔ <site>.merfy.ru).
+    # MinIO по умолчанию отдаёт `Access-Control-Allow-Origin: https://gateway.merfy.ru`,
+    # что не покрывает customize.merfy.ru → CORS REJECT → icons как black
+    # boxes, Hero пустой. Public assets без credentials → `*` безопасно.
+    proxy_hide_header Access-Control-Allow-Origin;
+    proxy_hide_header Access-Control-Allow-Credentials;
+    add_header Access-Control-Allow-Origin "*" always;
+    add_header Cross-Origin-Resource-Policy "cross-origin" always;
+
     # Health check — проверяем реальный upstream (MinIO)
     location /health {
         set $minio_health ${MINIO_URL}/${BUCKET}/${SITE_PATH}/index.html;
