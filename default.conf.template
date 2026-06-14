@@ -2,6 +2,13 @@ server {
     listen 80;
     server_name _;
 
+    # 301-редиректы (product canonical) должны отдавать ОТНОСИТЕЛЬНЫЙ Location,
+    # иначе за TLS-терминатором nginx видит http и шлёт Location: http://… →
+    # лишний хоп http→https. absolute_redirect off → Location: /product/<slug>,
+    # браузер резолвит на текущий https-origin.
+    absolute_redirect off;
+    port_in_redirect off;
+
     # DNS resolver для динамических upstream (Docker internal DNS)
     resolver 127.0.0.11 valid=30s ipv6=off;
     resolver_timeout 5s;
