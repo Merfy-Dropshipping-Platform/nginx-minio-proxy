@@ -45,6 +45,34 @@ server {
         error_page 500 502 503 504 /50x.html;
     }
 
+    # Каноникализация product URL: /product?id=<x> → 301 /product/<x>
+    # Exact-match нужен, чтобы редирект сработал ДО generic `location /`.
+    # Без ?id отдаём «голую» универсальную страницу product/index.html.
+    location = /product {
+        if ($arg_id) {
+            return 301 /product/$arg_id;
+        }
+
+        set $upstream ${MINIO_URL}/${BUCKET}/${SITE_PATH}/product/index.html;
+        proxy_pass $upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $proxy_host;
+        proxy_hide_header x-amz-id-2;
+        proxy_hide_header x-amz-request-id;
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 30s;
+        proxy_send_timeout 30s;
+        proxy_intercept_errors on;
+        error_page 404 /404.html;
+        error_page 500 502 503 504 /50x.html;
+    }
+
+    # Legacy множественное число → каноническое единственное:
+    # /products/<x> → 301 /product/<x>. Regex outranks prefix `location /`.
+    location ~ ^/products/(.+?)/?$ {
+        return 301 /product/$1;
+    }
+
     # Все остальные пути
     location / {
         # Проверяем наличие файла, потом index.html в директории
