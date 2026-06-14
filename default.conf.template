@@ -73,6 +73,41 @@ server {
         return 301 /product/$1;
     }
 
+    # Pretty product URL /product/<slug>. Если статическая per-slug страница уже
+    # собрана (build.service) — отдаём её (полный SEO). Если ещё нет (новый товар
+    # до debounce-ребилда) — fallback на универсальную product/index.html, которая
+    # клиентски гидрируется по slug из пути → ноль 404 в окне между правкой и ребилдом.
+    location ~ ^/product/([^/]+)/?$ {
+        set $upstream ${MINIO_URL}/${BUCKET}/${SITE_PATH}/product/$1/index.html;
+        proxy_pass $upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $proxy_host;
+        proxy_hide_header x-amz-id-2;
+        proxy_hide_header x-amz-request-id;
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 30s;
+        proxy_send_timeout 30s;
+        proxy_intercept_errors on;
+        error_page 404 = @product_fallback;
+        error_page 500 502 503 504 /50x.html;
+    }
+
+    # Fallback не-собранной per-slug страницы → универсальная product/index.html.
+    location @product_fallback {
+        set $upstream ${MINIO_URL}/${BUCKET}/${SITE_PATH}/product/index.html;
+        proxy_pass $upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $proxy_host;
+        proxy_hide_header x-amz-id-2;
+        proxy_hide_header x-amz-request-id;
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 30s;
+        proxy_send_timeout 30s;
+        proxy_intercept_errors on;
+        error_page 404 /404.html;
+        error_page 500 502 503 504 /50x.html;
+    }
+
     # Все остальные пути
     location / {
         # Проверяем наличие файла, потом index.html в директории
