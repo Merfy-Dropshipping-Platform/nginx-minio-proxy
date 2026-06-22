@@ -1,3 +1,17 @@
+# nginx-minio-proxy — раздаёт статические сайты Merfy из MinIO.
+#
+# Два режима (обратносовместимо):
+#   • per-site (как было): env SITE_PATH=sites/<slug> задан → проксируем ОДНУ папку.
+#   • shared (новый):      SITE_PATH="" (пусто) → путь берётся из Host-заголовка:
+#                          <slug>.merfy.ru → sites/<slug>. ОДИН контейнер на все сайты.
+# Регекс [^.]+ для лейбла исключает точки/слеши → path-traversal невозможен.
+
+# Лейбл сабдомена из Host: <slug>.merfy.ru → <slug>
+map $host $merfy_label {
+    ~^(?<lbl>[^.]+)\.    $lbl;
+    default              "";
+}
+
 server {
     listen 80;
     server_name _;
@@ -24,9 +38,23 @@ server {
     add_header Access-Control-Allow-Origin "*" always;
     add_header Cross-Origin-Resource-Policy "cross-origin" always;
 
-    # Health check — проверяем реальный upstream (MinIO)
-    location /health {
-        set $minio_health ${MINIO_URL}/${BUCKET}/${SITE_PATH}/index.html;
+    # === Резолв пути сайта в MinIO (обратносовместимо) ===
+    # envsubst подставляет ${SITE_PATH}: per-site app → "sites/<slug>", shared proxy → "".
+    # Если задан (per-site) — используем его; если пусто (shared) — берём из Host.
+    set $configured_site "${SITE_PATH}";
+    set $site_path $configured_site;
+    if ($site_path = "") {
+        set $site_path "sites/$merfy_label";
+    }
+
+    # Health check.
+    #   shared (SITE_PATH пуст): просто подтверждаем, что nginx жив (нет одной папки для проверки).
+    #   per-site: проверяем реальный upstream (index.html сайта в MinIO).
+    location = /health {
+        if ($configured_site = "") {
+            return 200 "ok\n";
+        }
+        set $minio_health ${MINIO_URL}/${BUCKET}/$configured_site/index.html;
         proxy_pass $minio_health;
         proxy_http_version 1.1;
         proxy_set_header Host $proxy_host;
@@ -38,7 +66,7 @@ server {
 
     # Корень сайта → index.html
     location = / {
-        set $upstream ${MINIO_URL}/${BUCKET}/${SITE_PATH}/index.html;
+        set $upstream ${MINIO_URL}/${BUCKET}/$site_path/index.html;
         proxy_pass $upstream;
         proxy_http_version 1.1;
         proxy_set_header Host $proxy_host;
@@ -60,7 +88,7 @@ server {
             return 301 /product/$arg_id;
         }
 
-        set $upstream ${MINIO_URL}/${BUCKET}/${SITE_PATH}/product/index.html;
+        set $upstream ${MINIO_URL}/${BUCKET}/$site_path/product/index.html;
         proxy_pass $upstream;
         proxy_http_version 1.1;
         proxy_set_header Host $proxy_host;
@@ -85,7 +113,7 @@ server {
     # до debounce-ребилда) — fallback на универсальную product/index.html, которая
     # клиентски гидрируется по slug из пути → ноль 404 в окне между правкой и ребилдом.
     location ~ ^/product/([^/]+)/?$ {
-        set $upstream ${MINIO_URL}/${BUCKET}/${SITE_PATH}/product/$1/index.html;
+        set $upstream ${MINIO_URL}/${BUCKET}/$site_path/product/$1/index.html;
         proxy_pass $upstream;
         proxy_http_version 1.1;
         proxy_set_header Host $proxy_host;
@@ -101,7 +129,7 @@ server {
 
     # Fallback не-собранной per-slug страницы → универсальная product/index.html.
     location @product_fallback {
-        set $upstream ${MINIO_URL}/${BUCKET}/${SITE_PATH}/product/index.html;
+        set $upstream ${MINIO_URL}/${BUCKET}/$site_path/product/index.html;
         proxy_pass $upstream;
         proxy_http_version 1.1;
         proxy_set_header Host $proxy_host;
@@ -118,11 +146,11 @@ server {
     # Все остальные пути
     location / {
         # Проверяем наличие файла, потом index.html в директории
-        set $upstream ${MINIO_URL}/${BUCKET}/${SITE_PATH}$uri;
+        set $upstream ${MINIO_URL}/${BUCKET}/$site_path$uri;
 
         # Если путь заканчивается на / - добавляем index.html
         if ($uri ~ "/$") {
-            set $upstream ${MINIO_URL}/${BUCKET}/${SITE_PATH}${uri}index.html;
+            set $upstream ${MINIO_URL}/${BUCKET}/$site_path${uri}index.html;
         }
 
         proxy_pass $upstream;
@@ -142,7 +170,7 @@ server {
 
     # Fallback для директорий без trailing slash
     location @try_index {
-        set $upstream ${MINIO_URL}/${BUCKET}/${SITE_PATH}$uri/index.html;
+        set $upstream ${MINIO_URL}/${BUCKET}/$site_path$uri/index.html;
         proxy_pass $upstream;
         proxy_http_version 1.1;
         proxy_set_header Host $proxy_host;
