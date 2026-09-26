@@ -1,0 +1,206 @@
+# Центральный прокси витрин (spec 116): один контейнер на все сайты контура.
+# Слаг сайта берётся из первой метки Host (`<slug>.merfy.ru` или `<slug>.dev.merfy.ru`),
+# путь в MinIO — ${BUCKET}/sites/<slug>. Снято с прод-контейнера merfy-sites-proxy (образ merfy-sites-proxy:test,
+# 22.06.2026) и параметризовано: MINIO_URL, BUCKET, SITE_PATH (пусто = режим «по Host»).
+# nginx:alpine подставляет только переменные окружения ($MINIO_URL, $BUCKET, $SITE_PATH); nginx-переменные не трогает.
+# nginx-minio-proxy — раздаёт статические сайты Merfy из MinIO.
+#
+# Два режима (обратносовместимо):
+#   • per-site (как было): env SITE_PATH=sites/<slug> задан → проксируем ОДНУ папку.
+#   • shared (новый):      SITE_PATH="" (пусто) → путь берётся из Host-заголовка:
+#                          <slug>.merfy.ru → sites/<slug>. ОДИН контейнер на все сайты.
+# Регекс [^.]+ для лейбла исключает точки/слеши → path-traversal невозможен.
+
+# Лейбл сабдомена из Host: <slug>.merfy.ru → <slug>
+map $host $merfy_label {
+    ~^(?<lbl>[^.]+)\.    $lbl;
+    default              "";
+}
+
+server {
+    listen 80;
+    server_name _;
+
+    # 301-редиректы (product canonical) должны отдавать ОТНОСИТЕЛЬНЫЙ Location,
+    # иначе за TLS-терминатором nginx видит http и шлёт Location: http://… →
+    # лишний хоп http→https. absolute_redirect off → Location: /product/<slug>,
+    # браузер резолвит на текущий https-origin.
+    absolute_redirect off;
+    port_in_redirect off;
+
+    # DNS resolver для динамических upstream (Docker internal DNS)
+    resolver 127.0.0.11 valid=30s ipv6=off;
+    resolver_timeout 5s;
+
+    # CORS wildcard для public static assets (icons, images, fonts) — preview
+    # iframe конструктора грузит SVG для mask-image и PNG/WEBP для Hero
+    # background с cross-origin (customize.merfy.ru ↔ <site>.merfy.ru).
+    # MinIO по умолчанию отдаёт `Access-Control-Allow-Origin: https://gateway.merfy.ru`,
+    # что не покрывает customize.merfy.ru → CORS REJECT → icons как black
+    # boxes, Hero пустой. Public assets без credentials → `*` безопасно.
+    proxy_hide_header Access-Control-Allow-Origin;
+    proxy_hide_header Access-Control-Allow-Credentials;
+    add_header Access-Control-Allow-Origin "*" always;
+    add_header Cross-Origin-Resource-Policy "cross-origin" always;
+
+    # === Резолв пути сайта в MinIO (обратносовместимо) ===
+    # envsubst подставляет : per-site app → "sites/<slug>", shared proxy → "".
+    # Если задан (per-site) — используем его; если пусто (shared) — берём из Host.
+    set $configured_site "${SITE_PATH}";
+    set $site_path $configured_site;
+    if ($site_path = "") {
+        set $site_path "sites/$merfy_label";
+    }
+
+    # Health check.
+    #   shared (SITE_PATH пуст): просто подтверждаем, что nginx жив (нет одной папки для проверки).
+    #   per-site: проверяем реальный upstream (index.html сайта в MinIO).
+    location = /health {
+        if ($configured_site = "") {
+            return 200 "ok\n";
+        }
+        set $minio_health ${MINIO_URL}/${BUCKET}/$configured_site/index.html;
+        proxy_pass $minio_health;
+        proxy_http_version 1.1;
+        proxy_set_header Host $proxy_host;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 5s;
+        # If MinIO responds (any status) → nginx returns it
+        # If MinIO is unreachable → nginx returns 502 → Coolify marks unhealthy
+    }
+
+    # Корень сайта → index.html
+    location = / {
+        set $upstream ${MINIO_URL}/${BUCKET}/$site_path/index.html;
+        proxy_pass $upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $proxy_host;
+        proxy_hide_header x-amz-id-2;
+        proxy_hide_header x-amz-request-id;
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 30s;
+        proxy_send_timeout 30s;
+        proxy_intercept_errors on;
+        error_page 404 /404.html;
+        error_page 500 502 503 504 /50x.html;
+    }
+
+    # Каноникализация product URL: /product?id=<x> → 301 /product/<x>
+    # Exact-match нужен, чтобы редирект сработал ДО generic `location /`.
+    # Без ?id отдаём «голую» универсальную страницу product/index.html.
+    location = /product {
+        if ($arg_id) {
+            return 301 /product/$arg_id;
+        }
+
+        set $upstream ${MINIO_URL}/${BUCKET}/$site_path/product/index.html;
+        proxy_pass $upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $proxy_host;
+        proxy_hide_header x-amz-id-2;
+        proxy_hide_header x-amz-request-id;
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 30s;
+        proxy_send_timeout 30s;
+        proxy_intercept_errors on;
+        error_page 404 /404.html;
+        error_page 500 502 503 504 /50x.html;
+    }
+
+    # Legacy множественное число → каноническое единственное:
+    # /products/<x> → 301 /product/<x>. Regex outranks prefix `location /`.
+    location ~ ^/products/(.+?)/?$ {
+        return 301 /product/$1;
+    }
+
+    # Pretty product URL /product/<slug>. Если статическая per-slug страница уже
+    # собрана (build.service) — отдаём её (полный SEO). Если ещё нет (новый товар
+    # до debounce-ребилда) — fallback на универсальную product/index.html, которая
+    # клиентски гидрируется по slug из пути → ноль 404 в окне между правкой и ребилдом.
+    location ~ ^/product/([^/]+)/?$ {
+        set $upstream ${MINIO_URL}/${BUCKET}/$site_path/product/$1/index.html;
+        proxy_pass $upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $proxy_host;
+        proxy_hide_header x-amz-id-2;
+        proxy_hide_header x-amz-request-id;
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 30s;
+        proxy_send_timeout 30s;
+        proxy_intercept_errors on;
+        error_page 404 = @product_fallback;
+        error_page 500 502 503 504 /50x.html;
+    }
+
+    # Fallback не-собранной per-slug страницы → универсальная product/index.html.
+    location @product_fallback {
+        set $upstream ${MINIO_URL}/${BUCKET}/$site_path/product/index.html;
+        proxy_pass $upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $proxy_host;
+        proxy_hide_header x-amz-id-2;
+        proxy_hide_header x-amz-request-id;
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 30s;
+        proxy_send_timeout 30s;
+        proxy_intercept_errors on;
+        error_page 404 /404.html;
+        error_page 500 502 503 504 /50x.html;
+    }
+
+    # Все остальные пути
+    location / {
+        # Проверяем наличие файла, потом index.html в директории
+        set $upstream ${MINIO_URL}/${BUCKET}/$site_path$uri;
+
+        # Если путь заканчивается на / - добавляем index.html
+        if ($uri ~ "/$") {
+            set $upstream ${MINIO_URL}/${BUCKET}/$site_path${uri}index.html;
+        }
+
+        proxy_pass $upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $proxy_host;
+        proxy_hide_header x-amz-id-2;
+        proxy_hide_header x-amz-request-id;
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 30s;
+        proxy_send_timeout 30s;
+
+        # При 404 пробуем /index.html для директорий
+        proxy_intercept_errors on;
+        error_page 404 = @try_index;
+        error_page 500 502 503 504 /50x.html;
+    }
+
+    # Fallback для директорий без trailing slash
+    location @try_index {
+        set $upstream ${MINIO_URL}/${BUCKET}/$site_path$uri/index.html;
+        proxy_pass $upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $proxy_host;
+        proxy_hide_header x-amz-id-2;
+        proxy_hide_header x-amz-request-id;
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 30s;
+        proxy_send_timeout 30s;
+        proxy_intercept_errors on;
+        error_page 404 /404.html;
+        error_page 500 502 503 504 /50x.html;
+    }
+
+    # Обработка ошибок
+    error_page 404 /404.html;
+    location = /404.html {
+        internal;
+        return 404 '<!DOCTYPE html><html><head><title>404</title></head><body><h1>Page Not Found</h1></body></html>';
+        add_header Content-Type text/html;
+    }
+
+    error_page 500 502 503 504 /50x.html;
+    location = /50x.html {
+        internal;
+        return 500 '<!DOCTYPE html><html><head><title>Server Error</title></head><body><h1>Server Error</h1></body></html>';
+        add_header Content-Type text/html;
+    }
+}
