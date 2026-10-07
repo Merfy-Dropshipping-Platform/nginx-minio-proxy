@@ -1,0 +1,24 @@
+{
+  "name": "@merfy/storefront-proxy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint .",
+    "format": "prettier --write --no-error-on-unmatched-pattern njs test probe",
+    "format:check": "prettier --check --no-error-on-unmatched-pattern njs test probe",
+    "stack:up": "docker compose -f compose.test.yml up -d --build --wait",
+    "stack:stop": "docker compose -f compose.test.yml stop",
+    "probe": "node probe/probe.mjs"
+  },
+  "devDependencies": {
+    "@aws-sdk/client-s3": "3.978.0",
+    "@eslint/js": "9.39.2",
+    "@vitest/coverage-v8": "3.2.7",
+    "eslint": "9.39.2",
+    "prettier": "3.8.0",
+    "vitest": "3.2.7"
+  }
+}

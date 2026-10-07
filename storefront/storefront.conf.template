@@ -1,0 +1,105 @@
+# Раздача витрин новых тем (design.md блока 5, В5-1 Б): метка хоста → указатель → таблица раздачи сборки → файл
+# по отпечатку. Свой образ рядом с прокси нынешних магазинов (В5-3 А): их конфиги и роутеры этот файл не трогает.
+# Переменные окружения (подставляет образ nginx): MINIO_URL, BUCKET, RENDERER_URL, DRAW_TIMEOUT, ROUTES_MEMORY.
+# Объекты — в ${BUCKET}/storefront/: pointers/<метка>.json, routes/<магазин>/<сборка>.json, blobs/<2 знака>/<отпечаток>.
+
+js_engine qjs;
+js_path /etc/nginx/njs/;
+js_import serve from serve.js;
+
+# Строки таблиц раздачи. Вытеснения нет: зона полна — раздача отвечает 503, а не теряет строки молча.
+js_shared_dict_zone zone=sf_routes:${ROUTES_MEMORY} type=string timeout=1h;
+
+# Заголовки файла: serve.js кладёт их сюда перед переходом в /_blob/, фильтр заголовков ставит в ответ.
+js_var $sf_type;
+js_var $sf_cache;
+js_var $sf_etag;
+js_var $sf_modified;
+
+proxy_cache_path /var/cache/nginx/sf-meta keys_zone=sf_meta:10m max_size=256m inactive=10m use_temp_path=off;
+proxy_cache_path /var/cache/nginx/sf-blobs levels=1:2 keys_zone=sf_blobs:10m max_size=1g inactive=7d use_temp_path=off;
+
+map $host $merfy_label {
+    ~^(?<lbl>[^.]+)\.    $lbl;
+    default              "";
+}
+
+server {
+    listen 80;
+    server_name _;
+    absolute_redirect off;
+    port_in_redirect off;
+    # Docker DNS: адреса хранилища и рисовальщика ищутся при запросе, nginx стартует и без них.
+    resolver 127.0.0.11 valid=30s ipv6=off;
+    resolver_timeout 2s;
+    # Таблица раздачи большого магазина приходит подзапросом целиком.
+    subrequest_output_buffer_size 16m;
+
+    location = /health {
+        return 200 "ok\n";
+    }
+
+    location = /_storefront/status {
+        allow 127.0.0.1;
+        deny all;
+        js_content serve.status;
+    }
+
+    location / {
+        js_content serve.serve;
+    }
+
+    # Указатель и таблицы: кэш на секунду; хранилище недоступно — последняя копия из кэша.
+    location ~ ^/_meta/(?<sf_object>.+)$ {
+        internal;
+        proxy_pass ${MINIO_URL}/${BUCKET}/storefront/$sf_object;
+        proxy_http_version 1.1;
+        proxy_cache sf_meta;
+        proxy_cache_key $sf_object;
+        proxy_cache_valid 200 404 1s;
+        proxy_cache_use_stale error timeout http_500 http_502 http_503 http_504;
+        proxy_cache_lock on;
+        proxy_connect_timeout 2s;
+        proxy_read_timeout 2s;
+    }
+
+    # Файл сборки по отпечатку не меняется: кэш на месяц.
+    location ~ "^/_blob/(?<sf_blob>[0-9a-f]{2}/[0-9a-f]{64})$" {
+        internal;
+        proxy_pass ${MINIO_URL}/${BUCKET}/storefront/blobs/$sf_blob;
+        proxy_http_version 1.1;
+        proxy_cache sf_blobs;
+        proxy_cache_key $sf_blob;
+        proxy_cache_valid 200 30d;
+        proxy_cache_use_stale error timeout http_500 http_502 http_503 http_504;
+        proxy_connect_timeout 2s;
+        proxy_read_timeout 5s;
+        proxy_hide_header x-amz-id-2;
+        proxy_hide_header x-amz-request-id;
+        proxy_hide_header Content-Security-Policy;
+        proxy_hide_header Strict-Transport-Security;
+        proxy_hide_header X-Xss-Protection;
+        proxy_hide_header Vary;
+        proxy_hide_header X-Ratelimit-Limit;
+        proxy_hide_header X-Ratelimit-Remaining;
+        proxy_intercept_errors on;
+        error_page 403 404 500 502 503 504 = @unavailable;
+        js_header_filter serve.fileHeaders;
+    }
+
+    # Рисовальщик (Св-1 В): одна страница по запросу. Места и тайм-аут решает блок 6 (В6-2), здесь только ожидание.
+    location = /_draw {
+        internal;
+        proxy_pass ${RENDERER_URL}/draw$is_args$args;
+        proxy_http_version 1.1;
+        proxy_connect_timeout 1s;
+        proxy_read_timeout ${DRAW_TIMEOUT};
+    }
+
+    location @unavailable {
+        default_type "text/plain; charset=utf-8";
+        add_header Retry-After 5 always;
+        add_header Cache-Control no-cache always;
+        return 503 "Магазин временно недоступен, попробуйте через минуту\n";
+    }
+}

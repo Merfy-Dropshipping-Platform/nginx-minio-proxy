@@ -1,0 +1,46 @@
+# Стенд проверки раздачи (задачи 1 и 11 плана блока 5): хранилище той же версии, что на dev и в проде (design.md,
+# факт 11), раздача из Dockerfile этой папки и подставной рисовальщик. Учётка хранилища — только для этого стенда.
+name: storefront-proxy-test
+
+services:
+  minio:
+    image: ghcr.io/coollabsio/minio:RELEASE.2025-10-15T17-29-55Z
+    command: ["minio", "server", "/data"]
+    environment:
+      MINIO_ROOT_USER: storefront-test
+      MINIO_ROOT_PASSWORD: storefront-test-only
+      MC_HOST_local: http://storefront-test:storefront-test-only@127.0.0.1:9000
+    ports: ["19000:9000"]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 2s
+      retries: 30
+
+  renderer:
+    image: node:24-alpine
+    command: ["node", "/app/fake-renderer.mjs"]
+    volumes: ["./test/fake-renderer.mjs:/app/fake-renderer.mjs:ro"]
+    environment:
+      RENDER_HASH: sha256:1111111111111111111111111111111111111111111111111111111111111111
+    ports: ["18082:8080"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 2s
+      retries: 30
+
+  proxy:
+    build: .
+    environment:
+      MINIO_URL: http://minio:9000
+      BUCKET: merfy-sites
+      RENDERER_URL: http://renderer:8080
+      DRAW_TIMEOUT: 2s
+      ROUTES_MEMORY: 64m
+    ports: ["18081:80"]
+    depends_on:
+      minio: { condition: service_healthy }
+      renderer: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/health"]
+      interval: 2s
+      retries: 30
