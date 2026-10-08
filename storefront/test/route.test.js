@@ -14,6 +14,7 @@ const TABLE = {
   notFound: null,
   versions: { render: `sha256:${'1'.repeat(64)}`, theme: 'nova@0.0.1' },
 };
+const NOW = Date.parse('2026-10-07T12:00:00.000Z');
 
 describe('указатель', () => {
   it('ключ указателя — по метке хоста', () => {
@@ -37,9 +38,12 @@ describe('указатель', () => {
     expect(() => route.checkPointer(value)).toThrow('указатель не формата v1');
   });
 
-  it('ключ таблицы и префикс строк — по магазину и сборке', () => {
-    expect(route.tableKey({ shop: SHOP, build: 7 })).toBe(`routes/${SHOP}/7.json`);
-    expect(route.tablePrefix({ shop: SHOP, build: 7 })).toBe(`${SHOP}|7|`);
+  it('ключи таблицы, списков и префикс строк — по магазину и сборке', () => {
+    const pointer = { shop: SHOP, build: 7 };
+    expect(route.tableKey(pointer)).toBe(`routes/${SHOP}/7.json`);
+    expect(route.drawnKey(pointer)).toBe(`drawn/${SHOP}/7.json`);
+    expect(route.entitiesKey(pointer)).toBe(`entities/${SHOP}.json`);
+    expect(route.tablePrefix(pointer)).toBe(`${SHOP}|7|`);
   });
 });
 
@@ -58,11 +62,19 @@ describe('таблица в общей памяти', () => {
     expect(JSON.parse(entries[2][1])).toEqual({ notFound: null, versions: TABLE.versions });
   });
 
+  it('переезды и удалённое — своими строками', () => {
+    const table = { ...TABLE, moved: { '/old/': '/new/' }, gone: { '/gone/': '2027-04-08T12:00:00.000Z' } };
+    const entries = Object.fromEntries(route.tableEntries(table, 'p|'));
+    expect(JSON.parse(entries['p|/old/'])).toEqual({ kind: 'moved', to: '/new/' });
+    expect(JSON.parse(entries['p|/gone/'])).toEqual({ kind: 'gone', until: '2027-04-08T12:00:00.000Z' });
+  });
+
   it.each([
-    ['другая версия', { ...TABLE, v: 2 }],
-    ['нет files', { ...TABLE, files: undefined }],
-  ])('таблица: %s — ошибка формата', (name, table) => {
-    expect(() => route.tableEntries(table, 'p|')).toThrow('таблица раздачи не формата v1');
+    ['другая версия', { ...TABLE, v: 2 }, 'таблица раздачи не формата v1'],
+    ['нет files', { ...TABLE, files: undefined }, 'таблица раздачи не формата v1'],
+    ['moved не объект', { ...TABLE, moved: [] }, 'moved не формата v1'],
+  ])('таблица: %s — ошибка формата', (name, table, text) => {
+    expect(() => route.tableEntries(table, 'p|')).toThrow(text);
   });
 
   it.each([
@@ -102,6 +114,67 @@ describe('ответ строкой файла', () => {
   });
 });
 
+describe('строка таблицы → ответ', () => {
+  const request = { ifNoneMatch: undefined, args: '', now: NOW };
+
+  it('файл — как строка файла', () => {
+    expect(route.entryAnswer({ kind: 'file', ...ROW }, request).kind).toBe('file');
+  });
+
+  it('переезд — 301 на новый адрес, параметры запроса сохраняются', () => {
+    const moved = { kind: 'moved', to: '/products/scarf-winter/' };
+    expect(route.entryAnswer(moved, request)).toEqual({ kind: 'redirect', location: '/products/scarf-winter/' });
+    expect(route.entryAnswer(moved, { ...request, args: 'utm=1' }).location).toBe('/products/scarf-winter/?utm=1');
+  });
+
+  it('удалённое — 410 до даты, потом обычная 404', () => {
+    expect(route.entryAnswer({ kind: 'gone', until: '2027-04-08T12:00:00.000Z' }, request)).toEqual({ kind: 'gone' });
+    expect(route.entryAnswer({ kind: 'gone', until: '2026-10-01T00:00:00.000Z' }, request)).toEqual({
+      kind: 'not-found',
+    });
+    expect(route.PAGE_STATUS).toEqual({ 'not-found': 404, gone: 410 });
+  });
+});
+
+describe('промах', () => {
+  it.each([
+    ['/products/scarf', '/products/scarf/'],
+    ['/products/scarf/', null],
+    ['/robots.txt', null],
+    ['/', null],
+  ])('адрес %s — со слешем: %s', (uri, form) => {
+    expect(route.slashForm(uri)).toBe(form);
+  });
+
+  it('список дорисовок: строка адреса или null', () => {
+    const list = { v: 1, rows: { '/products/osen/': ROW } };
+    expect(route.drawnRow(list, '/products/osen/')).toEqual(ROW);
+    expect(route.drawnRow(list, '/products/none/')).toBeNull();
+    expect(route.drawnRow(null, '/products/osen/')).toBeNull();
+  });
+
+  it.each([
+    ['не v1', { v: 2, rows: {} }, 'список дорисовок не формата v1'],
+    ['строка не по формату', { v: 1, rows: { '/x/': { h: 'abc' } } }, 'строка файла /x/ не формата v1'],
+  ])('список дорисовок %s — ошибка формата', (name, list, text) => {
+    expect(() => route.drawnRow(list, '/x/')).toThrow(text);
+  });
+
+  it('список адресов сущностей: есть адрес или нет; списка нет — нет', () => {
+    const list = { v: 1, paths: ['/products/osen/'] };
+    expect(route.isListed(list, '/products/osen/')).toBe(true);
+    expect(route.isListed(list, '/products/random/')).toBe(false);
+    expect(route.isListed(null, '/products/osen/')).toBe(false);
+    expect(() => route.isListed({ v: 1, paths: 'x' }, '/x/')).toThrow('список адресов сущностей не формата v1');
+  });
+
+  it('страница 404 темы — файл по отпечатку; нет её — встроенная', () => {
+    expect(route.notFoundUri({ notFound: HASH })).toBe(`/_blob/aa/${HASH}`);
+    expect(route.notFoundUri({ notFound: null })).toBeNull();
+    expect(route.notFoundUri(null)).toBeNull();
+  });
+});
+
 describe('промах и рисовальщик', () => {
   it('запрос к рисовальщику несёт магазин, сборку, путь и версии', () => {
     const meta = { versions: TABLE.versions };
@@ -116,6 +189,7 @@ describe('промах и рисовальщик', () => {
     [404, 'not-found'],
     [409, 'unavailable'],
     [502, 'unavailable'],
+    [503, 'unavailable'],
     [504, 'unavailable'],
   ])('рисовальщик ответил %i — %s', (status, answer) => {
     expect(route.drawAnswer(status)).toBe(answer);

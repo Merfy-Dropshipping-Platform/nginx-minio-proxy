@@ -1,6 +1,7 @@
 // Проба раздачи (design.md блока 5, В5-1 Б). Стенд — compose.test.yml (`pnpm stack:up`), в хранилище — сборки двух
 // выдуманных магазинов на 2000 и 20 000 страниц. Меряет время ответа, раскладку таблицы в память и память на строку,
-// промах с вызовом рисовальщика и тайм-аутом, ответ при замёрзшем хранилище. Пороги — THRESHOLDS; не прошла — код 1.
+// промах с вызовом рисовальщика и тайм-аутом, промах мимо списка адресов сущностей на 20 000 адресов (В5-7 Б), ответ
+// при замёрзшем хранилище. Пороги — THRESHOLDS; не прошла — код 1.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { Agent, request } from 'node:http';
@@ -9,14 +10,35 @@ import { CreateBucketCommand, PutBucketPolicyCommand, PutObjectCommand, S3Client
 const BUCKET = 'merfy-sites';
 const PROXY_PORT = 18081;
 const AGENT = new Agent({ keepAlive: true, maxSockets: 8 });
-const THRESHOLDS = { medianMs: 15, p95Ms: 40, loadMs: 1000, bytesPerRow: 1024, frozenColdMs: 3000, slowDrawMs: 3500 };
+const THRESHOLDS = {
+  medianMs: 15,
+  p95Ms: 40,
+  loadMs: 1000,
+  bytesPerRow: 1024,
+  frozenColdMs: 3000,
+  slowDrawMs: 3500,
+  listMissMs: 30,
+};
 const RENDER = `sha256:${'1'.repeat(64)}`;
 const BLOB_COUNT = 64;
 const REQUESTS = 400;
 const CONCURRENCY = 8;
+const LIST_MISSES = 50;
+// У магазина на 2000 страниц в списке адресов сущностей — два адреса, которых нет в сборке: их дорисовывают. У магазина
+// на 20 000 — 20 000 адресов: так меряем промах мимо большого списка.
 const SHOPS = [
-  { label: 'probe-2k', shop: '00000000-0000-4000-8000-000000002000', rows: 2000 },
-  { label: 'probe-20k', shop: '00000000-0000-4000-8000-000000020000', rows: 20000 },
+  {
+    label: 'probe-2k',
+    shop: '00000000-0000-4000-8000-000000002000',
+    rows: 2000,
+    entities: ['/products/new-arrival/', '/products/slow/'],
+  },
+  {
+    label: 'probe-20k',
+    shop: '00000000-0000-4000-8000-000000020000',
+    rows: 20000,
+    entities: Array.from({ length: 20000 }, (_, index) => `/products/e-${index}/`),
+  },
 ];
 
 const s3 = new S3Client({
@@ -29,6 +51,7 @@ const s3 = new S3Client({
 const hex = (body) => createHash('sha256').update(body).digest('hex');
 const put = (key, body, type) =>
   s3.send(new PutObjectCommand({ Bucket: BUCKET, Key: `storefront/${key}`, Body: body, ContentType: type }));
+
 const compose = (...args) =>
   execFileSync('docker', ['compose', '-f', 'compose.test.yml', ...args], { encoding: 'utf8' });
 const line = (text) => process.stdout.write(`${text}\n`);
@@ -86,6 +109,7 @@ function tableOf(shop, hashes) {
 
 async function seedShop(shop, hashes) {
   await put(`routes/${shop.shop}/1.json`, JSON.stringify(tableOf(shop, hashes)), 'application/json');
+  await put(`entities/${shop.shop}.json`, JSON.stringify({ v: 1, paths: shop.entities }), 'application/json');
   await put(
     `pointers/${shop.label}.json`,
     JSON.stringify({ v: 1, shop: shop.shop, build: 1, newest: 1, rev: 1, paused: false, pending: null, history: [] }),
@@ -168,6 +192,20 @@ async function measureDraw(results) {
   );
 }
 
+// Бот перебирает адреса, которых нет ни в сборке, ни в списке: раздача читает список на каждый промах и отвечает 404,
+// не зовя рисовальщик.
+async function measureListMiss(results) {
+  const shop = SHOPS[1];
+  const replies = [];
+  for (let index = 0; index < LIST_MISSES; index += 1) replies.push(await get(shop.label, `/products/bot-${index}/`));
+  const times = replies.map((reply) => reply.ms).sort((left, right) => left - right);
+  const statuses = [...new Set(replies.map((reply) => reply.status))];
+  results.listMiss = { statuses: statuses.join(', '), median: round(percentile(times, 0.5)) };
+  line(
+    `промах мимо списка на ${shop.entities.length} адресов, ${LIST_MISSES} запросов: ответ ${results.listMiss.statuses}, медиана ${results.listMiss.median} мс`,
+  );
+}
+
 async function measureFrozenStorage(results) {
   compose('pause', 'minio');
   try {
@@ -194,6 +232,10 @@ function failures(results) {
     [results.draw.drawn === 200, `дорисовка: ${results.draw.drawn}`],
     [results.draw.slow === 503 && results.draw.retryAfter === '5', `рисовальщик молчит: ${results.draw.slow}`],
     [results.draw.slowMs <= THRESHOLDS.slowDrawMs, `рисовальщик молчит: ${results.draw.slowMs} мс`],
+    [
+      results.listMiss.statuses === '404' && results.listMiss.median <= THRESHOLDS.listMissMs,
+      `промах мимо списка: ${results.listMiss.statuses} за ${results.listMiss.median} мс`,
+    ],
     [results.frozen.cached === 200, `хранилище замёрзло, страница из кэша: ${results.frozen.cached}`],
     [
       results.frozen.cold === 503 && results.frozen.coldMs <= THRESHOLDS.frozenColdMs,
@@ -216,6 +258,7 @@ line(
   `время ответа (${SHOPS[0].rows} строк, ${REQUESTS} запросов по ${CONCURRENCY}): медиана ${results.steady.median} мс, p95 ${results.steady.p95} мс`,
 );
 await measureDraw(results);
+await measureListMiss(results);
 await measureFrozenStorage(results);
 const failed = failures(results);
 line(failed.length === 0 ? 'проба прошла' : `проба не прошла: ${failed.join('; ')}`);

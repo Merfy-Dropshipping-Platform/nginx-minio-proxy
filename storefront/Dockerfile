@@ -10,6 +10,11 @@ ENV MINIO_URL=http://minio:9000 \
     BUCKET=merfy-sites \
     RENDERER_URL=http://renderer:8080 \
     DRAW_TIMEOUT=5s \
-    ROUTES_MEMORY=64m
+    ROUTES_MEMORY=64m \
+    DRAW_RATE_SHOP=2r/s \
+    DRAW_BURST_SHOP=10 \
+    DRAW_RATE_ALL=20r/s \
+    DRAW_BURST_ALL=40 \
+    INDEXNOW_KEY=
 
 EXPOSE 80

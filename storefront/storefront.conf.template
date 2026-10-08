@@ -1,7 +1,9 @@
 # Раздача витрин новых тем (design.md блока 5, В5-1 Б): метка хоста → указатель → таблица раздачи сборки → файл
 # по отпечатку. Свой образ рядом с прокси нынешних магазинов (В5-3 А): их конфиги и роутеры этот файл не трогает.
-# Переменные окружения (подставляет образ nginx): MINIO_URL, BUCKET, RENDERER_URL, DRAW_TIMEOUT, ROUTES_MEMORY.
-# Объекты — в ${BUCKET}/storefront/: pointers/<метка>.json, routes/<магазин>/<сборка>.json, blobs/<2 знака>/<отпечаток>.
+# Переменные окружения (подставляет образ nginx): MINIO_URL, BUCKET, RENDERER_URL, DRAW_TIMEOUT, ROUTES_MEMORY,
+# DRAW_RATE_SHOP, DRAW_BURST_SHOP, DRAW_RATE_ALL, DRAW_BURST_ALL, INDEXNOW_KEY.
+# Объекты — в ${BUCKET}/storefront/: pointers/<метка>.json, routes/<магазин>/<сборка>.json, drawn/<магазин>/<сборка>.json,
+# entities/<магазин>.json, blobs/<2 знака>/<отпечаток>.
 
 js_engine qjs;
 js_path /etc/nginx/njs/;
@@ -18,11 +20,20 @@ js_var $sf_modified;
 
 proxy_cache_path /var/cache/nginx/sf-meta keys_zone=sf_meta:10m max_size=256m inactive=10m use_temp_path=off;
 proxy_cache_path /var/cache/nginx/sf-blobs levels=1:2 keys_zone=sf_blobs:10m max_size=1g inactive=7d use_temp_path=off;
+proxy_cache_path /var/cache/nginx/sf-draw keys_zone=sf_draw:10m max_size=256m inactive=10m use_temp_path=off;
 
 map $host $merfy_label {
     ~^(?<lbl>[^.]+)\.    $lbl;
     default              "";
 }
+
+# Защита рисовальщика от перебора (В5-7): не больше DRAW_RATE_SHOP вызовов на магазин и DRAW_RATE_ALL на всю раздачу,
+# сверх лимита — 503 (сервер на 127.0.0.1:8081 ниже). Ключ общего лимита — одна строка на всех.
+map $host $sf_everyone {
+    default all;
+}
+limit_req_zone $arg_shop zone=sf_draw_shop:10m rate=${DRAW_RATE_SHOP};
+limit_req_zone $sf_everyone zone=sf_draw_all:1m rate=${DRAW_RATE_ALL};
 
 server {
     listen 80;
@@ -47,6 +58,12 @@ server {
 
     location / {
         js_content serve.serve;
+    }
+
+    # Файл ключа IndexNow — на любом хосте (design.md, раздел 4); уведомления шлёт сборщик (блок 6).
+    location = /${INDEXNOW_KEY}.txt {
+        default_type "text/plain; charset=utf-8";
+        return 200 "${INDEXNOW_KEY}";
     }
 
     # Указатель и таблицы: кэш на секунду; хранилище недоступно — последняя копия из кэша.
@@ -74,6 +91,9 @@ server {
         proxy_cache_use_stale error timeout http_500 http_502 http_503 http_504;
         proxy_connect_timeout 2s;
         proxy_read_timeout 5s;
+        # Тип содержимого ставит фильтр заголовков из таблицы раздачи. Тип хранилища прячем: иначе nginx берёт из него
+        # кодировку и дописывает её второй раз — «text/html; charset=utf-8; charset=utf-8».
+        proxy_hide_header Content-Type;
         proxy_hide_header x-amz-id-2;
         proxy_hide_header x-amz-request-id;
         proxy_hide_header Content-Security-Policy;
@@ -87,13 +107,19 @@ server {
         js_header_filter serve.fileHeaders;
     }
 
-    # Рисовальщик (Св-1 В): одна страница по запросу. Места и тайм-аут решает блок 6 (В6-2), здесь только ожидание.
+    # Рисовальщик (Св-1 В): одна страница по запросу. Места и тайм-аут решает блок 6 (В6-2), здесь — ожидание и кэш:
+    # одинаковые промахи склеиваются в один вызов, «такого нет» помним минуту (В5-7). Лимит стоит в сервере ниже: так
+    # он считает настоящие вызовы рисовальщика, а не ответы из этого кэша.
     location = /_draw {
         internal;
-        proxy_pass ${RENDERER_URL}/draw$is_args$args;
+        proxy_pass http://127.0.0.1:8081/draw$is_args$args;
         proxy_http_version 1.1;
-        proxy_connect_timeout 1s;
         proxy_read_timeout ${DRAW_TIMEOUT};
+        proxy_cache sf_draw;
+        proxy_cache_key $args;
+        proxy_cache_valid 200 404 1m;
+        proxy_cache_lock on;
+        proxy_cache_lock_timeout ${DRAW_TIMEOUT};
     }
 
     location @unavailable {
@@ -101,5 +127,24 @@ server {
         add_header Retry-After 5 always;
         add_header Cache-Control no-cache always;
         return 503 "Магазин временно недоступен, попробуйте через минуту\n";
+    }
+}
+
+# Вызов рисовальщика под лимитом (В5-7): сверх лимита — 503, раздача отвечает «временно недоступно». Слушает только
+# внутри контейнера, сюда ходит /_draw.
+server {
+    listen 127.0.0.1:8081;
+    server_name _;
+    resolver 127.0.0.11 valid=30s ipv6=off;
+    resolver_timeout 2s;
+
+    location = /draw {
+        limit_req zone=sf_draw_shop burst=${DRAW_BURST_SHOP} nodelay;
+        limit_req zone=sf_draw_all burst=${DRAW_BURST_ALL} nodelay;
+        limit_req_status 503;
+        proxy_pass ${RENDERER_URL}/draw$is_args$args;
+        proxy_http_version 1.1;
+        proxy_connect_timeout 1s;
+        proxy_read_timeout ${DRAW_TIMEOUT};
     }
 }

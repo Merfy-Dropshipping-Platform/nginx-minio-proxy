@@ -1,13 +1,16 @@
 // Раздача витрин новых тем (design.md блока 5, В5-1 Б): метка хоста → указатель магазина → таблица раздачи его
-// живой сборки → файл по отпечатку. Решения — в route.js, здесь только ввод-вывод nginx: подзапросы к кэшу
-// хранилища (/_meta/), общая память (sf_routes) и ответ. Таблица сборки не меняется, поэтому её строки один раз
-// раскладываются в общую память и дальше ищутся по одному ключу.
+// живой сборки → файл по отпечатку, переезд (301) или удалённое (410). Промах — список дорисовок, потом список адресов
+// сущностей (В5-7 Б): адрес есть — рисовальщик (Св-1 В), нет — 404. Решения — в route.js, здесь только ввод-вывод
+// nginx: подзапросы к кэшу хранилища (/_meta/, /_blob/) и к рисовальщику (/_draw), общая память (sf_routes), ответ.
+// Таблица сборки не меняется, поэтому её строки один раз раскладываются в общую память и дальше ищутся по одному ключу.
 import route from 'route.js';
 
 const ROUTES = ngx.shared.sf_routes;
 const RETRY_AFTER_SECONDS = '5';
+const PAGE_TYPE = 'text/html; charset=utf-8';
 const PAGES = {
   'not-found': { status: 404, text: 'Страница не найдена' },
+  gone: { status: 410, text: 'Страница удалена' },
   unavailable: { status: 503, text: 'Магазин временно недоступен, попробуйте через минуту' },
 };
 
@@ -18,11 +21,20 @@ function send(r, status, headers, body) {
   r.return(status, body);
 }
 
-function sendPage(r, kind) {
+function sendText(r, kind) {
   const page = PAGES[kind];
   const headers = { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-cache' };
   if (page.status === 503) headers['Retry-After'] = RETRY_AFTER_SECONDS;
   send(r, page.status, headers, `${page.text}\n`);
+}
+
+// 404 и 410 — страницей 404 темы, если она есть в сборке; иначе встроенным текстом.
+async function sendPage(r, meta, kind) {
+  const uri = route.notFoundUri(meta);
+  if (uri === null) return sendText(r, kind);
+  const reply = await r.subrequest(uri);
+  if (reply.status !== 200) return sendText(r, kind);
+  send(r, route.PAGE_STATUS[kind], { 'Content-Type': PAGE_TYPE, 'Cache-Control': 'no-cache' }, reply.responseText);
 }
 
 async function readJson(r, key) {
@@ -53,22 +65,46 @@ function sendFile(r, answer) {
   r.internalRedirect(answer.uri);
 }
 
-// Промах (Св-1 В): страницы нет в сборке — раздача зовёт рисовальщик.
+const SENDERS = {
+  file: (r, meta, answer) => sendFile(r, answer),
+  'not-modified': (r, meta, answer) => sendFile(r, answer),
+  redirect: (r, meta, answer) => r.return(301, answer.location),
+  gone: (r, meta) => sendPage(r, meta, 'gone'),
+  'not-found': (r, meta) => sendPage(r, meta, 'not-found'),
+};
+
+const sendAnswer = (r, meta, answer) => SENDERS[answer.kind](r, meta, answer);
+
+// Рисовальщик (Св-1 В): одинаковые промахи склеивает кэш /_draw, перебор сверх лимита — 503 (storefront.conf.template).
 async function draw(r, pointer, meta) {
   const reply = await r.subrequest('/_draw', { args: route.drawArgs(pointer, meta, r.uri) });
   const answer = route.drawAnswer(reply.status);
-  if (answer !== 'drawn') return sendPage(r, answer);
+  if (answer === 'unavailable') return sendText(r, answer);
+  if (answer === 'not-found') return sendPage(r, meta, answer);
   send(r, 200, route.drawnHeaders(reply.headersOut['X-Merfy-Hash']), reply.responseText);
+}
+
+// Промах: адрес со «/» на конце есть — 301 туда; есть в списке дорисовок — файл; есть в списке адресов — рисуем.
+async function miss(r, pointer, prefix, meta) {
+  const slash = route.slashForm(r.uri);
+  if (slash !== null && ROUTES.get(prefix + slash) !== undefined)
+    return sendAnswer(r, meta, { kind: 'redirect', location: route.withArgs(slash, r.variables.args) });
+  const drawn = route.drawnRow(await readJson(r, route.drawnKey(pointer)), r.uri);
+  if (drawn !== null) return sendFile(r, route.fileAnswer(drawn, r.headersIn['If-None-Match']));
+  if (!route.isListed(await readJson(r, route.entitiesKey(pointer)), r.uri)) return sendPage(r, meta, 'not-found');
+  return draw(r, pointer, meta);
 }
 
 async function answer(r) {
   const raw = await readJson(r, route.pointerKey(r.variables.merfy_label));
-  if (raw === null) return sendPage(r, 'not-found');
+  if (raw === null) return sendText(r, 'not-found');
   const pointer = route.checkPointer(raw);
   const prefix = await ensureTable(r, pointer);
+  const meta = JSON.parse(ROUTES.get(prefix + route.META_KEY));
   const entry = ROUTES.get(prefix + r.uri);
-  if (entry !== undefined) return sendFile(r, route.fileAnswer(JSON.parse(entry), r.headersIn['If-None-Match']));
-  return draw(r, pointer, JSON.parse(ROUTES.get(prefix + route.META_KEY)));
+  if (entry === undefined) return miss(r, pointer, prefix, meta);
+  const request = { ifNoneMatch: r.headersIn['If-None-Match'], args: r.variables.args, now: Date.now() };
+  return sendAnswer(r, meta, route.entryAnswer(JSON.parse(entry), request));
 }
 
 async function serve(r) {
@@ -76,7 +112,7 @@ async function serve(r) {
     await answer(r);
   } catch (error) {
     r.error(String(error));
-    sendPage(r, 'unavailable');
+    sendText(r, 'unavailable');
   }
 }
 

@@ -36,6 +36,12 @@ services:
       RENDERER_URL: http://renderer:8080
       DRAW_TIMEOUT: 2s
       ROUTES_MEMORY: 64m
+      # Лимит на магазин маленький — тест перебора упирается в него быстро; общий — с запасом для остальных тестов.
+      DRAW_RATE_SHOP: 1r/s
+      DRAW_BURST_SHOP: "2"
+      DRAW_RATE_ALL: 100r/s
+      DRAW_BURST_ALL: "100"
+      INDEXNOW_KEY: 5f0c8a2d9e4b4c7a8d1e6f3b2a9c0d47
     ports: ["18081:80"]
     depends_on:
       minio: { condition: service_healthy }
