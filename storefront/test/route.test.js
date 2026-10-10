@@ -168,8 +168,8 @@ describe('промах', () => {
     expect(() => route.isListed({ v: 1, paths: 'x' }, '/x/')).toThrow('список адресов сущностей не формата v1');
   });
 
-  it('страница 404 темы — файл по отпечатку; нет её — встроенная', () => {
-    expect(route.notFoundUri({ notFound: HASH })).toBe(`/_blob/aa/${HASH}`);
+  it('страница 404 темы — файл по отпечатку через /_text/ (njs читает тело, сжатие не нужно); нет её — встроенная', () => {
+    expect(route.notFoundUri({ notFound: HASH })).toBe(`/_text/aa/${HASH}`);
     expect(route.notFoundUri({ notFound: null })).toBeNull();
     expect(route.notFoundUri(null)).toBeNull();
   });

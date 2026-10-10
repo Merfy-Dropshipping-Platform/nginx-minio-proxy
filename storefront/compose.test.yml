@@ -16,6 +16,18 @@ services:
       interval: 2s
       retries: 30
 
+  # На dev и в проде MinIO стоит за прокси, который сжимает ответ, если клиент принимает gzip. Раздача ходит к хранилищу
+  # через такой же прокси — иначе стенд не видит ошибок сжатия в подзапросах njs.
+  storage:
+    image: nginx:1.31.3-alpine
+    volumes: ["./test/storage-gzip.conf:/etc/nginx/conf.d/default.conf:ro"]
+    depends_on:
+      minio: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 2s
+      retries: 30
+
   renderer:
     image: node:24-alpine
     command: ["node", "/app/fake-renderer.mjs"]
@@ -31,7 +43,7 @@ services:
   proxy:
     build: .
     environment:
-      MINIO_URL: http://minio:9000
+      MINIO_URL: http://storage:9000
       BUCKET: merfy-sites
       RENDERER_URL: http://renderer:8080
       DRAW_TIMEOUT: 2s
@@ -44,7 +56,7 @@ services:
       INDEXNOW_KEY: 5f0c8a2d9e4b4c7a8d1e6f3b2a9c0d47
     ports: ["18081:80"]
     depends_on:
-      minio: { condition: service_healthy }
+      storage: { condition: service_healthy }
       renderer: { condition: service_healthy }
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1/health"]

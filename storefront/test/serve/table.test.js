@@ -2,6 +2,7 @@
 // 404 темы и вышедший срок 410, адрес без «/» на конце, robots.txt из таблицы, файл ключа IndexNow. Стенд —
 // `pnpm stack:up`.
 import { randomUUID } from 'node:crypto';
+import { gunzipSync } from 'node:zlib';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { ensureBucket, fileRow, get, seedShop } from './stand.js';
 
@@ -37,6 +38,14 @@ describe('раздача по таблице сборки', () => {
     expect(reply.headers['cache-control']).toBe('no-cache');
     expect(reply.headers.etag).toBe(`"${home.h}"`);
     expect(reply.headers['last-modified']).toBe('Tue, 06 Oct 2026 09:00:00 GMT');
+  });
+
+  it('браузер принимает gzip: таблица новой сборки читается, файл приходит сжатым, тело то же', async () => {
+    const fresh = await seedShop({ files: { '/': home } });
+    const reply = await get(fresh.label, '/', { 'Accept-Encoding': 'gzip' });
+    expect(reply.status).toBe(200);
+    expect(reply.headers['content-encoding']).toBe('gzip');
+    expect(gunzipSync(reply.raw).toString()).toBe(HOME);
   });
 
   it('у браузера тот же отпечаток — 304 без тела', async () => {

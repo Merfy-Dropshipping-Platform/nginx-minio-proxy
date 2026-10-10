@@ -110,6 +110,21 @@ server {
         js_header_filter serve.fileHeaders;
     }
 
+    # Файл сборки, тело которого читает сам njs (страница 404 темы): без сжатия, иначе njs получит байты gzip и отдаст их
+    # покупателю как страницу. Ключ кэша свой — сжатые копии из /_blob/ сюда не попадают.
+    location ~ "^/_text/(?<sf_text>[0-9a-f]{2}/[0-9a-f]{64})$" {
+        internal;
+        proxy_pass ${MINIO_URL}/${BUCKET}/storefront/blobs/$sf_text;
+        proxy_http_version 1.1;
+        proxy_set_header Accept-Encoding "";
+        proxy_cache sf_blobs;
+        proxy_cache_key text:$sf_text;
+        proxy_cache_valid 200 30d;
+        proxy_cache_use_stale error timeout http_500 http_502 http_503 http_504;
+        proxy_connect_timeout 2s;
+        proxy_read_timeout 5s;
+    }
+
     # Рисовальщик (Св-1 В): одна страница по запросу. Места и тайм-аут решает блок 6 (В6-2), здесь — ожидание и кэш:
     # одинаковые промахи склеиваются в один вызов, «такого нет» помним минуту (В5-7). Лимит стоит в сервере ниже: так
     # он считает настоящие вызовы рисовальщика, а не ответы из этого кэша.
@@ -117,6 +132,8 @@ server {
         internal;
         proxy_pass http://127.0.0.1:8081/draw$is_args$args;
         proxy_http_version 1.1;
+        # Страницу рисовальщика njs читает текстом и отдаёт сам — сжатие ему не нужно, как таблицам и странице 404.
+        proxy_set_header Accept-Encoding "";
         proxy_read_timeout ${DRAW_TIMEOUT};
         proxy_cache sf_draw;
         proxy_cache_key $args;

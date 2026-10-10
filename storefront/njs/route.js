@@ -79,6 +79,9 @@ export function tableEntries(table, prefix) {
 
 export const blobUri = (hash) => `/_blob/${hash.slice(0, 2)}/${hash}`;
 
+// Файл сборки, тело которого читает сам njs: /_text/ берёт его из хранилища без сжатия.
+export const textUri = (hash) => `/_text/${hash.slice(0, 2)}/${hash}`;
+
 // If-None-Match может нести несколько отпечатков и слабую пометку W/.
 function sameEtag(ifNoneMatch, etag) {
   const tags = String(ifNoneMatch ?? '').split(',');
@@ -148,8 +151,9 @@ export function drawnHeaders(hash) {
   return HEX.test(String(hash)) ? fileHeaders(row) : { 'Content-Type': DRAWN_PAGE_TYPE, 'Cache-Control': 'no-cache' };
 }
 
-// Страница 404 или 410: у темы есть страница 404 — её файл, иначе встроенный текст раздачи.
-export const notFoundUri = (meta) => (meta !== null && HEX.test(String(meta.notFound)) ? blobUri(meta.notFound) : null);
+// Страница 404 или 410: у темы есть страница 404 — её файл, иначе встроенный текст раздачи. Тело страницы отдаёт njs,
+// поэтому файл берётся через /_text/, без сжатия.
+export const notFoundUri = (meta) => (meta !== null && HEX.test(String(meta.notFound)) ? textUri(meta.notFound) : null);
 
 export default {
   PAGE_STATUS,
@@ -165,6 +169,7 @@ export default {
   isFresh,
   tableEntries,
   blobUri,
+  textUri,
   fileHeaders,
   fileAnswer,
   withArgs,

@@ -70,9 +70,11 @@ export function get(label, path, headers = {}) {
     const req = request(options, (response) => {
       const chunks = [];
       response.on('data', (chunk) => chunks.push(chunk));
-      response.on('end', () =>
-        resolve({ status: response.statusCode, headers: response.headers, body: Buffer.concat(chunks).toString() }),
-      );
+      // raw — байты как пришли: сжатый ответ сравнивают после распаковки.
+      response.on('end', () => {
+        const raw = Buffer.concat(chunks);
+        resolve({ status: response.statusCode, headers: response.headers, body: raw.toString(), raw });
+      });
     });
     req.on('error', reject);
     req.end();

@@ -67,6 +67,14 @@ describe('промах: адреса нет в сборке', () => {
     expect(calls).toBe(0);
   });
 
+  it('браузер принимает gzip — страница 404 темы приходит целиком и без сжатия', async () => {
+    const shop = await shopWith([]);
+    const reply = await get(shop.label, '/products/unknown/', { 'Accept-Encoding': 'gzip' });
+    expect(reply.status).toBe(404);
+    expect(reply.headers['content-encoding']).toBeUndefined();
+    expect(reply.body).toBe(NOT_FOUND_PAGE);
+  });
+
   it('у темы нет страницы 404 — встроенный текст', async () => {
     const shop = await seedShop({ files: { '/': home } });
     const reply = await get(shop.label, '/products/unknown/');
