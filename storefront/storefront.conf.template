@@ -71,6 +71,9 @@ server {
         internal;
         proxy_pass ${MINIO_URL}/${BUCKET}/storefront/$sf_object;
         proxy_http_version 1.1;
+        # Подзапрос наследует Accept-Encoding покупателя, и MinIO отдаёт таблицу сжатой — JSON.parse в njs падает, раздача
+        # отвечает 503. Таблицы читает njs, сжатие им не нужно.
+        proxy_set_header Accept-Encoding "";
         proxy_cache sf_meta;
         proxy_cache_key $sf_object;
         proxy_cache_valid 200 404 1s;
