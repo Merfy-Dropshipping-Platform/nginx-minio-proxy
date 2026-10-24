@@ -210,3 +210,38 @@ describe('промах и рисовальщик', () => {
     });
   });
 });
+
+describe('CSP витрины (блок 13 «Секций и SDK», часть 13в)', () => {
+  const POLICY = "default-src 'self'; object-src 'none'; base-uri 'none'";
+  const META = { notFound: null, versions: TABLE.versions, csp: POLICY };
+  const HTML = 'text/html; charset=utf-8';
+
+  it('режим report — Report-Only, enforce — обязательный заголовок; только у HTML', () => {
+    expect(route.cspHeaders('report', META, HTML)).toEqual({ 'Content-Security-Policy-Report-Only': POLICY });
+    expect(route.cspHeaders('enforce', META, HTML)).toEqual({ 'Content-Security-Policy': POLICY });
+    expect(route.cspHeaders('report', META, 'text/css; charset=utf-8')).toEqual({});
+  });
+
+  it.each(['off', '', 'Report', 'constructor', '__proto__', undefined])('режим «%s» — без заголовка', (mode) => {
+    expect(route.cspHeaders(mode, META, HTML)).toEqual({});
+  });
+
+  it('у сборки нет политики или нет служебной строки — без заголовка', () => {
+    expect(route.cspHeaders('report', { notFound: null, versions: TABLE.versions }, HTML)).toEqual({});
+    expect(route.cspHeaders('report', null, HTML)).toEqual({});
+  });
+
+  it('политика таблицы — в служебной строке сборки; нет поля — строка прежняя', () => {
+    expect(JSON.parse(route.tableEntries({ ...TABLE, csp: POLICY }, 'p|').at(-1)[1])).toEqual(META);
+    expect(JSON.parse(route.tableEntries(TABLE, 'p|').at(-1)[1])).toEqual({ notFound: null, versions: TABLE.versions });
+  });
+
+  it.each([
+    ['перевод строки', `${POLICY}\r\nX-Evil: 1`],
+    ['не строка', 42],
+    ['пусто', ''],
+    ['длиннее 12 288', 'a'.repeat(12_289)],
+  ])('csp таблицы: %s — ошибка формата', (_name, csp) => {
+    expect(() => route.tableEntries({ ...TABLE, csp }, 'p|')).toThrow('csp таблицы раздачи не формата v1');
+  });
+});

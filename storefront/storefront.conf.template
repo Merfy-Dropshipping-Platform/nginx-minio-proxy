@@ -1,7 +1,7 @@
 # Раздача витрин новых тем (design.md блока 5, В5-1 Б): метка хоста → указатель → таблица раздачи сборки → файл
 # по отпечатку. Свой образ рядом с прокси нынешних магазинов (В5-3 А): их конфиги и роутеры этот файл не трогает.
 # Переменные окружения (подставляет образ nginx): MINIO_URL, BUCKET, RENDERER_URL, DRAW_TIMEOUT, ROUTES_MEMORY,
-# DRAW_RATE_SHOP, DRAW_BURST_SHOP, DRAW_RATE_ALL, DRAW_BURST_ALL, INDEXNOW_KEY.
+# DRAW_RATE_SHOP, DRAW_BURST_SHOP, DRAW_RATE_ALL, DRAW_BURST_ALL, INDEXNOW_KEY, STOREFRONT_CSP.
 # Объекты — в ${BUCKET}/storefront/: pointers/<метка>.json, routes/<магазин>/<сборка>.json, drawn/<магазин>/<сборка>.json,
 # entities/<магазин>.json, blobs/<2 знака>/<отпечаток>.
 
@@ -17,6 +17,10 @@ js_var $sf_type;
 js_var $sf_cache;
 js_var $sf_etag;
 js_var $sf_modified;
+# CSP (блок 13 «Секций и SDK», часть 13в): режим из окружения образа (report, enforce, другое — без заголовка) и
+# заголовки HTML-файла — sendFile записывает их сюда перед переходом в /_blob/.
+js_var $sf_csp_mode "${STOREFRONT_CSP}";
+js_var $sf_csp;
 
 proxy_cache_path /var/cache/nginx/sf-meta keys_zone=sf_meta:10m max_size=256m inactive=10m use_temp_path=off;
 proxy_cache_path /var/cache/nginx/sf-blobs levels=1:2 keys_zone=sf_blobs:10m max_size=1g inactive=7d use_temp_path=off;

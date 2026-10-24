@@ -59,6 +59,23 @@ function checkFileRow(path, row) {
 const recordOf = (value, what) => (isRecord(value) ? value : fail(`${what} не формата v1`));
 const entry = (prefix, path, value) => [prefix + path, JSON.stringify(value)];
 
+// CSP витрины (блок 13 «Секций и SDK», часть 13в): политику пишет сборка в поле csp таблицы раздачи, режим — переменная
+// STOREFRONT_CSP образа: report — Content-Security-Policy-Report-Only, enforce — Content-Security-Policy, другое — без
+// заголовка. Map, а не объект: режимы «__proto__» и «constructor» заголовка не дают.
+const CSP_HEADERS = new Map([
+  ['report', 'Content-Security-Policy-Report-Only'],
+  ['enforce', 'Content-Security-Policy'],
+]);
+const CSP_TEXT = /^[\x20-\x7e]{1,12288}$/;
+
+// Поле csp таблицы → служебная строка сборки. Нет поля — {}; не строка печатных ASCII до 12 288 знаков — ошибка формата
+// (как у других полей: 503 и строка в журнале nginx).
+function cspOf(table) {
+  if (table.csp === undefined) return {};
+  if (typeof table.csp !== 'string' || !CSP_TEXT.test(table.csp)) fail('csp таблицы раздачи не формата v1');
+  return { csp: table.csp };
+}
+
 // Строки таблицы для общей памяти: ключ — префикс сборки и путь, значение — JSON строки с её видом: файл, переезд
 // (301) или удалённое (410 до даты). Последняя — служебная строка сборки: страница 404 темы и версии.
 export function tableEntries(table, prefix) {
@@ -73,7 +90,7 @@ export function tableEntries(table, prefix) {
   const gone = Object.entries(recordOf(table.gone, 'gone')).map(([path, until]) =>
     entry(prefix, path, { kind: 'gone', until }),
   );
-  const meta = entry(prefix, META_KEY, { notFound: table.notFound, versions: table.versions });
+  const meta = entry(prefix, META_KEY, { notFound: table.notFound, versions: table.versions, ...cspOf(table) });
   return [...files, ...moved, ...gone, meta];
 }
 
@@ -151,6 +168,14 @@ export function drawnHeaders(hash) {
   return HEX.test(String(hash)) ? fileHeaders(row) : { 'Content-Type': DRAWN_PAGE_TYPE, 'Cache-Control': 'no-cache' };
 }
 
+// Заголовок CSP ответа (часть 13в): режим, служебная строка сборки и тип содержимого → { имя: политика } или {}.
+export function cspHeaders(mode, meta, type) {
+  const name = CSP_HEADERS.get(String(mode));
+  const policy = meta === null || meta === undefined ? undefined : meta.csp;
+  if (name === undefined || policy === undefined || !String(type).startsWith('text/html')) return {};
+  return { [name]: policy };
+}
+
 // Страница 404 или 410: у темы есть страница 404 — её файл, иначе встроенный текст раздачи. Тело страницы отдаёт njs,
 // поэтому файл берётся через /_text/, без сжатия.
 export const notFoundUri = (meta) => (meta !== null && HEX.test(String(meta.notFound)) ? textUri(meta.notFound) : null);
@@ -172,6 +197,7 @@ export default {
   textUri,
   fileHeaders,
   fileAnswer,
+  cspHeaders,
   withArgs,
   entryAnswer,
   slashForm,

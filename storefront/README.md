@@ -62,3 +62,11 @@ nginx 1.31.3 с модулем njs: отдаёт магазины новой т�
 - `test/route.test.js` — правила; `test/serve/*.test.js` — раздача целиком; `test/fake-renderer.mjs` — подставной
   рисовальщик; `probe/probe.mjs` — проба.
 - `Dockerfile` — образ раздачи, контекст сборки — эта папка.
+
+## CSP витрин новых тем (блок 13 «Секций и SDK», часть 13в)
+
+Политику пишет сборка магазина (site-gen, `storefront-build/src/csp.ts`) в поле `csp` таблицы раздачи; раздача ставит
+её заголовком у HTML-ответов: файл страницы и его 304, страница 404 и 410 темы, дорисованная страница. У CSS, JS,
+картинок, `robots.txt` и у 503 заголовка нет. Режим — переменная `STOREFRONT_CSP`: `report` (умолчание образа) —
+`Content-Security-Policy-Report-Only`, `enforce` — `Content-Security-Policy`, другое значение — без заголовка. Откат —
+`STOREFRONT_CSP=off` и перезапуск. Прокси нынешних тем (`central.conf.template`, `default.conf.template`) CSP не ставит.

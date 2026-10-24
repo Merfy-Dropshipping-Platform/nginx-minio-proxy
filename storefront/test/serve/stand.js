@@ -86,3 +86,13 @@ export async function renderCalls() {
   const response = await fetch(`${RENDERER_URL}/calls`);
   return (await response.json()).count;
 }
+
+// Магазин со сборкой 1 и политикой CSP в таблице раздачи (блок 13 «Секций и SDK», часть 13в). Таблица переписывается
+// до первого запроса к магазину — раздача читает её уже с csp.
+export async function seedCspShop({ files, notFound = null, csp, entities = [] }) {
+  const shop = await seedShop({ files, notFound, entities });
+  const versions = { render: RENDER, theme: 'nova@0.0.1' };
+  const table = { v: 1, shop: shop.id, build: 1, versions, notFound, files, moved: {}, gone: {}, csp };
+  await putJson(`routes/${shop.id}/1.json`, table);
+  return shop;
+}
