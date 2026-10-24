@@ -12,6 +12,11 @@ js_import serve from serve.js;
 # Строки таблиц раздачи. Вытеснения нет: зона полна — раздача отвечает 503, а не теряет строки молча.
 js_shared_dict_zone zone=sf_routes:${ROUTES_MEMORY} type=string timeout=1h;
 
+# Копии страниц 502 магазинов (блок 7 «Секций и SDK», часть 7а): по метке хоста — хеш и HTML 502.html текущей сборки.
+# Места мало — старые копии вытесняются (evict): магазин без копии получает нейтральную страницу, раздача работает.
+# evict в nginx 1.31 требует timeout=; 7d — дольше sf_routes (1h), копия обновляется при каждой раскладке таблицы.
+js_shared_dict_zone zone=sf_unavailable:8m type=string timeout=7d evict;
+
 # Заголовки файла: serve.js кладёт их сюда перед переходом в /_blob/, фильтр заголовков ставит в ответ.
 js_var $sf_type;
 js_var $sf_cache;
@@ -146,11 +151,9 @@ server {
         proxy_cache_lock_timeout ${DRAW_TIMEOUT};
     }
 
+    # Файл сборки не прочитался (часть 7а): 503 с Retry-After и копией 502.html магазина, её нет — нейтральная страница.
     location @unavailable {
-        default_type "text/plain; charset=utf-8";
-        add_header Retry-After 5 always;
-        add_header Cache-Control no-cache always;
-        return 503 "Магазин временно недоступен, попробуйте через минуту\n";
+        js_content serve.unavailable;
     }
 }
 

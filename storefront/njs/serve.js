@@ -6,12 +6,13 @@
 import route from 'route.js';
 
 const ROUTES = ngx.shared.sf_routes;
+// Копии страниц 502 магазинов (часть 7а): ключ — метка хоста.
+const UNAVAILABLE = ngx.shared.sf_unavailable;
 const RETRY_AFTER_SECONDS = '5';
 const PAGE_TYPE = 'text/html; charset=utf-8';
 const PAGES = {
   'not-found': { status: 404, text: 'Страница не найдена' },
   gone: { status: 410, text: 'Страница удалена' },
-  unavailable: { status: 503, text: 'Магазин временно недоступен, попробуйте через минуту' },
 };
 
 function send(r, status, headers, body) {
@@ -24,8 +25,35 @@ function send(r, status, headers, body) {
 function sendText(r, kind) {
   const page = PAGES[kind];
   const headers = { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-cache' };
-  if (page.status === 503) headers['Retry-After'] = RETRY_AFTER_SECONDS;
   send(r, page.status, headers, `${page.text}\n`);
+}
+
+// 503 «временно недоступно» (часть 7а): копия 502.html магазина, её нет — нейтральная страница платформы.
+function sendUnavailable(r) {
+  const headers = { 'Content-Type': PAGE_TYPE, 'Cache-Control': 'no-cache', 'Retry-After': RETRY_AFTER_SECONDS };
+  send(r, 503, headers, route.keptHtml(UNAVAILABLE.get(r.variables.merfy_label)));
+}
+
+// Копия 502.html читается, когда таблица сборки раскладывается в память. Сбой копии раздачу не останавливает: строка в
+// журнал, прежняя копия остаётся. В таблице копии нет — копия магазина удаляется.
+async function keepUnavailable(r, table) {
+  const label = r.variables.merfy_label;
+  const hash = route.unavailableHash(table);
+  try {
+    if (hash === null) {
+      UNAVAILABLE.delete(label);
+      return;
+    }
+    if (route.isKept(UNAVAILABLE.get(label), hash)) return;
+    const reply = await r.subrequest(route.textUri(hash));
+    if (reply.status !== 200) {
+      r.warn(`storefront: копия 502 ${hash} — хранилище ответило ${reply.status}`);
+      return;
+    }
+    UNAVAILABLE.set(label, route.keptValue(hash, reply.responseText));
+  } catch (error) {
+    r.warn(`storefront: копия 502 — ${String(error)}`);
+  }
 }
 
 // Заголовок CSP страницы магазина (блок 13 «Секций и SDK», часть 13в): режим — переменная STOREFRONT_CSP образа,
@@ -56,6 +84,7 @@ async function ensureTable(r, pointer) {
   const table = await readJson(r, route.tableKey(pointer));
   if (table === null) throw new Error(`storefront: нет таблицы раздачи ${route.tableKey(pointer)}`);
   route.tableEntries(table, prefix).forEach(([key, value]) => ROUTES.set(key, value));
+  await keepUnavailable(r, table);
   ROUTES.set(prefix + route.LOADED_KEY, String(Date.now()));
   return prefix;
 }
@@ -87,7 +116,7 @@ const sendAnswer = (r, meta, answer) => SENDERS[answer.kind](r, meta, answer);
 async function draw(r, pointer, meta) {
   const reply = await r.subrequest('/_draw', { args: route.drawArgs(pointer, meta, r.uri) });
   const answer = route.drawAnswer(reply.status);
-  if (answer === 'unavailable') return sendText(r, answer);
+  if (answer === 'unavailable') return sendUnavailable(r);
   if (answer === 'not-found') return sendPage(r, meta, answer);
   const headers = route.drawnHeaders(reply.headersOut['X-Merfy-Hash']);
   send(r, 200, { ...headers, ...cspFor(r, meta, headers['Content-Type']) }, reply.responseText);
@@ -121,7 +150,7 @@ async function serve(r) {
     await answer(r);
   } catch (error) {
     r.error(String(error));
-    sendText(r, 'unavailable');
+    sendUnavailable(r);
   }
 }
 
@@ -142,4 +171,4 @@ function status(r) {
   send(r, 200, { 'Content-Type': 'application/json' }, `${JSON.stringify(body)}\n`);
 }
 
-export default { serve, fileHeaders, status };
+export default { serve, unavailable: sendUnavailable, fileHeaders, status };

@@ -180,6 +180,26 @@ export function cspHeaders(mode, meta, type) {
 // поэтому файл берётся через /_text/, без сжатия.
 export const notFoundUri = (meta) => (meta !== null && HEX.test(String(meta.notFound)) ? textUri(meta.notFound) : null);
 
+// Копия страницы 502 магазина (блок 7 «Секций и SDK», часть 7а): 502.html текущей сборки, хеш — поле unavailable
+// таблицы. В общей памяти sf_unavailable по метке хоста — «хеш, перевод строки, HTML». Копии нет — нейтральная страница.
+export const NEUTRAL_UNAVAILABLE =
+  '<!doctype html><html lang="ru"><head><meta charset="utf-8">' +
+  '<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">' +
+  '<title>Сайт временно недоступен</title><style>body{margin:0;min-height:100vh;display:flex;align-items:center;' +
+  'justify-content:center;background:#fff;color:#111;font-family:system-ui,sans-serif;text-align:center}' +
+  'h1{margin:0 0 12px;font-size:28px;line-height:1.2}p{margin:0;color:#555}</style></head><body><main>' +
+  '<h1>Сайт временно недоступен</h1><p>Попробуйте через минуту</p></main></body></html>';
+
+export const unavailableHash = (table) =>
+  isRecord(table) && HEX.test(String(table.unavailable)) ? table.unavailable : null;
+export const keptValue = (hash, html) => `${hash}\n${html}`;
+export const isKept = (value, hash) => typeof value === 'string' && value.startsWith(`${hash}\n`);
+
+export function keptHtml(value) {
+  const at = typeof value === 'string' ? value.indexOf('\n') : -1;
+  return at > 0 ? value.slice(at + 1) : NEUTRAL_UNAVAILABLE;
+}
+
 export default {
   PAGE_STATUS,
   LOADED_KEY,
@@ -207,4 +227,9 @@ export default {
   drawAnswer,
   drawnHeaders,
   notFoundUri,
+  NEUTRAL_UNAVAILABLE,
+  unavailableHash,
+  keptValue,
+  isKept,
+  keptHtml,
 };
