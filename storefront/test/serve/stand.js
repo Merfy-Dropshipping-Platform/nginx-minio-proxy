@@ -52,10 +52,20 @@ export async function fileRow(text, type = 'text/html; charset=utf-8', cache = '
 }
 
 // Магазин со сборкой 1: files — «путь → строка файла», остальное — поля таблицы раздачи и списки.
-export async function seedShop({ files, moved = {}, gone = {}, notFound = null, render = RENDER, entities = [] }) {
+// unavailable — хеш 502.html (часть 7а блока 7); нет — ключа в таблице нет, как у сборок до 7а.
+export async function seedShop({
+  files,
+  moved = {},
+  gone = {},
+  notFound = null,
+  unavailable,
+  render = RENDER,
+  entities = [],
+}) {
   const shop = { label: `t-${randomUUID().slice(0, 8)}`, id: randomUUID(), build: 1 };
   const versions = { render, theme: 'nova@0.0.1' };
-  await putJson(`routes/${shop.id}/1.json`, { v: 1, shop: shop.id, build: 1, versions, notFound, files, moved, gone });
+  const table = { v: 1, shop: shop.id, build: 1, versions, notFound, files, moved, gone };
+  await putJson(`routes/${shop.id}/1.json`, unavailable === undefined ? table : { ...table, unavailable });
   await putJson(`entities/${shop.id}.json`, { v: 1, paths: entities });
   const pointer = { v: 1, shop: shop.id, build: 1, newest: 1, rev: 1, paused: false, pending: null, history: [] };
   await putJson(`pointers/${shop.label}.json`, pointer);
@@ -96,3 +106,6 @@ export async function seedCspShop({ files, notFound = null, csp, entities = [] }
   await putJson(`routes/${shop.id}/1.json`, table);
   return shop;
 }
+
+// Указатель не формата v1: раздача не может прочитать магазин — как сбой хранилища для этого магазина (часть 7а).
+export const breakPointer = (shop) => putJson(`pointers/${shop.label}.json`, { v: 2 });

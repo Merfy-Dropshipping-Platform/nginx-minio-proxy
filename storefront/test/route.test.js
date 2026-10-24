@@ -245,3 +245,34 @@ describe('CSP витрины (блок 13 «Секций и SDK», часть 13
     expect(() => route.tableEntries({ ...TABLE, csp }, 'p|')).toThrow('csp таблицы раздачи не формата v1');
   });
 });
+
+describe('копия страницы 502 (блок 7 «Секций и SDK», часть 7а)', () => {
+  const COPY = '<!doctype html><title>Сайт временно недоступен · Шарфы</title>';
+
+  it('хеш копии — из таблицы; нет ключа или не hex — копии нет', () => {
+    expect(route.unavailableHash({ ...TABLE, unavailable: HASH })).toBe(HASH);
+    expect(route.unavailableHash(TABLE)).toBeNull();
+    expect(route.unavailableHash({ ...TABLE, unavailable: 'abc' })).toBeNull();
+    expect(route.unavailableHash(null)).toBeNull();
+  });
+
+  it('значение в памяти — хеш и HTML; тот же хеш — копия уже есть', () => {
+    const value = route.keptValue(HASH, COPY);
+    expect(route.isKept(value, HASH)).toBe(true);
+    expect(route.isKept(value, 'b'.repeat(64))).toBe(false);
+    expect(route.isKept(undefined, HASH)).toBe(false);
+    expect(route.keptHtml(value)).toBe(COPY);
+  });
+
+  it('копии нет — нейтральная страница платформы: без цветов магазина', () => {
+    expect(route.keptHtml(undefined)).toBe(route.NEUTRAL_UNAVAILABLE);
+    expect(route.keptHtml('без перевода строки')).toBe(route.NEUTRAL_UNAVAILABLE);
+    expect(route.NEUTRAL_UNAVAILABLE).toContain('<h1>Сайт временно недоступен</h1>');
+    expect(route.NEUTRAL_UNAVAILABLE).not.toContain('var(--');
+  });
+
+  it('служебная строка сборки не меняется: копия хранится отдельно от таблицы', () => {
+    const entries = route.tableEntries({ ...TABLE, unavailable: HASH }, 'p|');
+    expect(JSON.parse(entries.at(-1)[1])).toEqual({ notFound: null, versions: TABLE.versions });
+  });
+});
