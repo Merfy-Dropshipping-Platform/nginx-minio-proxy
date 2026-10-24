@@ -15,6 +15,7 @@ ENV MINIO_URL=http://minio:9000 \
     DRAW_BURST_SHOP=10 \
     DRAW_RATE_ALL=20r/s \
     DRAW_BURST_ALL=40 \
+    STOREFRONT_CSP=report \
     INDEXNOW_KEY=
 
 EXPOSE 80

@@ -28,13 +28,18 @@ function sendText(r, kind) {
   send(r, page.status, headers, `${page.text}\n`);
 }
 
+// Заголовок CSP страницы магазина (блок 13 «Секций и SDK», часть 13в): режим — переменная STOREFRONT_CSP образа,
+// политика — поле csp служебной строки сборки. Не HTML, нет политики или режим не report/enforce — {}.
+const cspFor = (r, meta, type) => route.cspHeaders(r.variables.sf_csp_mode, meta, type);
+
 // 404 и 410 — страницей 404 темы, если она есть в сборке; иначе встроенным текстом.
 async function sendPage(r, meta, kind) {
   const uri = route.notFoundUri(meta);
   if (uri === null) return sendText(r, kind);
   const reply = await r.subrequest(uri);
   if (reply.status !== 200) return sendText(r, kind);
-  send(r, route.PAGE_STATUS[kind], { 'Content-Type': PAGE_TYPE, 'Cache-Control': 'no-cache' }, reply.responseText);
+  const headers = { 'Content-Type': PAGE_TYPE, 'Cache-Control': 'no-cache', ...cspFor(r, meta, PAGE_TYPE) };
+  send(r, route.PAGE_STATUS[kind], headers, reply.responseText);
 }
 
 async function readJson(r, key) {
@@ -55,9 +60,12 @@ async function ensureTable(r, pointer) {
   return prefix;
 }
 
-// Заголовки файла ставит фильтр /_blob/ (fileHeaders ниже): njs передаёт их через переменные запроса.
-function sendFile(r, answer) {
-  if (answer.kind === 'not-modified') return send(r, 304, answer.headers, '');
+// Заголовки файла ставит фильтр /_blob/ (fileHeaders ниже): njs передаёт их через переменные запроса. CSP HTML-файла
+// (часть 13в) — и у 304, и у файла: JSON заголовков в sf_csp.
+function sendFile(r, answer, meta) {
+  const csp = cspFor(r, meta, answer.headers['Content-Type']);
+  if (answer.kind === 'not-modified') return send(r, 304, { ...answer.headers, ...csp }, '');
+  r.variables.sf_csp = JSON.stringify(csp);
   r.variables.sf_type = answer.headers['Content-Type'];
   r.variables.sf_cache = answer.headers['Cache-Control'];
   r.variables.sf_etag = answer.headers.ETag;
@@ -66,8 +74,8 @@ function sendFile(r, answer) {
 }
 
 const SENDERS = {
-  file: (r, meta, answer) => sendFile(r, answer),
-  'not-modified': (r, meta, answer) => sendFile(r, answer),
+  file: (r, meta, answer) => sendFile(r, answer, meta),
+  'not-modified': (r, meta, answer) => sendFile(r, answer, meta),
   redirect: (r, meta, answer) => r.return(301, answer.location),
   gone: (r, meta) => sendPage(r, meta, 'gone'),
   'not-found': (r, meta) => sendPage(r, meta, 'not-found'),
@@ -81,7 +89,8 @@ async function draw(r, pointer, meta) {
   const answer = route.drawAnswer(reply.status);
   if (answer === 'unavailable') return sendText(r, answer);
   if (answer === 'not-found') return sendPage(r, meta, answer);
-  send(r, 200, route.drawnHeaders(reply.headersOut['X-Merfy-Hash']), reply.responseText);
+  const headers = route.drawnHeaders(reply.headersOut['X-Merfy-Hash']);
+  send(r, 200, { ...headers, ...cspFor(r, meta, headers['Content-Type']) }, reply.responseText);
 }
 
 // Промах: адрес со «/» на конце есть — 301 туда; есть в списке дорисовок — файл; есть в списке адресов — рисуем.
@@ -90,7 +99,7 @@ async function miss(r, pointer, prefix, meta) {
   if (slash !== null && ROUTES.get(prefix + slash) !== undefined)
     return sendAnswer(r, meta, { kind: 'redirect', location: route.withArgs(slash, r.variables.args) });
   const drawn = route.drawnRow(await readJson(r, route.drawnKey(pointer)), r.uri);
-  if (drawn !== null) return sendFile(r, route.fileAnswer(drawn, r.headersIn['If-None-Match']));
+  if (drawn !== null) return sendFile(r, route.fileAnswer(drawn, r.headersIn['If-None-Match']), meta);
   if (!route.isListed(await readJson(r, route.entitiesKey(pointer)), r.uri)) return sendPage(r, meta, 'not-found');
   return draw(r, pointer, meta);
 }
@@ -121,6 +130,10 @@ function fileHeaders(r) {
   r.headersOut['Cache-Control'] = r.variables.sf_cache;
   r.headersOut.ETag = r.variables.sf_etag;
   r.headersOut['Last-Modified'] = r.variables.sf_modified || undefined;
+  // CSP HTML-файла (часть 13в): JSON заголовков, который записал sendFile; у других файлов — {}.
+  Object.entries(JSON.parse(r.variables.sf_csp || '{}')).forEach(([name, value]) => {
+    r.headersOut[name] = value;
+  });
 }
 
 // Сколько строк в общей памяти и сколько места осталось — для пробы и для дежурного.
