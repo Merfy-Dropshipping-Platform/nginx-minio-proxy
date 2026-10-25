@@ -138,11 +138,15 @@ async function listed(r, served, list) {
   send(r, 200, { ...headers, ...cspFor(r, meta, headers['Content-Type']) }, reply.responseText);
 }
 
-// Промах: адрес со «/» на конце есть — 301 туда; есть в списке дорисовок — файл; есть в списке адресов — рисуем.
+// Промах: адрес со «/» на конце есть — 301 туда; есть и без «/» (страницы N сборки, блок 11) — 301 туда; есть в
+// списке дорисовок — файл; есть в списке адресов — рисуем.
 async function miss(r, pointer, prefix, meta) {
   const slash = route.slashForm(r.uri);
   if (slash !== null && ROUTES.get(prefix + slash) !== undefined)
     return sendAnswer(r, meta, { kind: 'redirect', location: route.withArgs(slash, r.variables.args) });
+  const stripped = route.noSlashForm(r.uri);
+  if (stripped !== null && ROUTES.get(prefix + stripped) !== undefined)
+    return sendAnswer(r, meta, { kind: 'redirect', location: route.withArgs(stripped, r.variables.args) });
   const drawn = route.drawnRow(await readJson(r, route.drawnKey(pointer)), r.uri);
   if (drawn !== null) return sendFile(r, route.fileAnswer(drawn, r.headersIn['If-None-Match']), meta);
   if (!route.isListed(await readJson(r, route.entitiesKey(pointer)), r.uri)) return sendPage(r, meta, 'not-found');

@@ -79,6 +79,13 @@ describe('раздача по таблице сборки', () => {
     expect(reply.headers.location).toBe('/products/scarf/?color=red');
   });
 
+  it('адрес со «/» на конце, а без «/» он есть — 301 туда (страница N из плана блока 11)', async () => {
+    const pages = await seedShop({ files: { '/': home, '/catalog/page/2': home } });
+    const reply = await get(pages.label, '/catalog/page/2/?q=%D0%BD%D0%BE%D0%B2%D0%B0');
+    expect(reply.status).toBe(301);
+    expect(reply.headers.location).toBe('/catalog/page/2?q=%D0%BD%D0%BE%D0%B2%D0%B0');
+  });
+
   it('robots.txt — файл из таблицы сборки', async () => {
     const reply = await get(shop.label, '/robots.txt');
     expect(reply.status).toBe(200);

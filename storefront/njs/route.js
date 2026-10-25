@@ -138,6 +138,12 @@ export function slashForm(uri) {
   return last === '' || last.includes('.') ? null : `${uri}/`;
 }
 
+// Обратный случай (блок 11): адрес со «/» на конце, а в сборке такой же без «/» — 301 туда. Адреса страниц списков в
+// плане блока 11 — со «/» (/catalog/page/2/), сборка делает их без «/»; «/» не отбрасывается у корня.
+export function noSlashForm(uri) {
+  return uri.length > 1 && uri.endsWith('/') ? uri.slice(0, -1) : null;
+}
+
 // Строка списка дорисовок для адреса или null. Списка нет — null.
 export function drawnRow(list, uri) {
   if (list === null) return null;
@@ -294,6 +300,7 @@ export default {
   withArgs,
   entryAnswer,
   slashForm,
+  noSlashForm,
   drawnRow,
   isListed,
   drawArgs,
