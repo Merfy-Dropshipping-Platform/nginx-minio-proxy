@@ -3,7 +3,8 @@
 // - указатель storefront/pointers/<метка хоста>.json — { v, shop, build, … };
 // - таблица раздачи сборки storefront/routes/<магазин>/<сборка>.json — { v, shop, build, files, moved, gone,
 //   notFound, versions }; строка файла — { h: отпечаток hex, t: тип содержимого, c: immutable | revalidate,
-//   m?: дата правки данных страницы };
+//   m?: дата правки данных страницы, l?: true — страница со списком (блок 11 «Секций и SDK»): параметры списка
+//   рисует рисовальщик };
 // - список дорисовок storefront/drawn/<магазин>/<сборка>.json — { v, rows: путь → строка файла };
 // - список адресов сущностей storefront/entities/<магазин>.json — { v, paths }.
 
@@ -51,7 +52,9 @@ export const tablePrefix = (pointer) => `${pointer.shop}|${pointer.build}|`;
 export const isFresh = (loadedAt, now) => loadedAt !== undefined && now - Number(loadedAt) < RELOAD_AFTER_MS;
 
 function checkFileRow(path, row) {
-  const valid = isRecord(row) && HEX.test(row.h) && typeof row.t === 'string' && row.c in CACHE_CONTROL;
+  // l (блок 11, часть 11а-2) — только true: иначе раздача не поймёт, страница ли это со списком.
+  const listFlag = row?.l === undefined || row?.l === true;
+  const valid = isRecord(row) && HEX.test(row.h) && typeof row.t === 'string' && row.c in CACHE_CONTROL && listFlag;
   if (!valid) fail(`строка файла ${path} не формата v1`);
   return row;
 }
@@ -149,8 +152,77 @@ export function isListed(list, uri) {
   return list.paths.includes(uri);
 }
 
-// Запрос к рисовальщику (Св-1 В): магазин, сборка, путь и версии живой сборки — рисует только своей версией.
-export function drawArgs(pointer, meta, path) {
+// Параметры списка (блок 11 «Секций и SDK», часть 11а-2; design.md блока 11, 11.4): страница со списком (строка файла с
+// l: true) с параметрами списка рисуется по запросу — их выбирает покупатель фильтрами каталога. Имена — те, что
+// принимает шлюз (site-gen, packages/storefront-build/src/list-query.ts); filter.<ключ группы> — по началу имени. Чужие
+// параметры (utm_source, yclid…) рисовальщика не зовут: обычный файл сборки.
+const LIST_NAMES = ['availability', 'collection', 'max_price', 'min_price', 'page', 'q', 'sort'];
+const LIST_FILTER_PREFIX = 'filter.';
+// Длиннее — файл сборки без параметров: ключ кеша рисовальщика не растёт без предела.
+export const LIST_MAX = 2048;
+const ONLY_PAGE = /^page=([1-9][0-9]{0,5})$/;
+const PAGE_SUFFIX = /\/page\/[1-9][0-9]{0,5}$/;
+
+const isListName = (name) =>
+  LIST_NAMES.includes(name) || (name.startsWith(LIST_FILTER_PREFIX) && name.length > LIST_FILTER_PREFIX.length);
+
+// «+» в адресе — пробел, как у URLSearchParams сборщика. Битая кодировка — пары нет; другие ошибки не прячем.
+function decodedPart(text) {
+  try {
+    return decodeURIComponent(text.replace(/\+/g, ' '));
+  } catch (error) {
+    if (error instanceof URIError) return null;
+    throw error;
+  }
+}
+
+function listPair(part) {
+  const at = part.indexOf('=');
+  const name = decodedPart(at === -1 ? part : part.slice(0, at));
+  const value = decodedPart(at === -1 ? '' : part.slice(at + 1));
+  if (name === null || value === null || value.trim() === '' || !isListName(name)) return null;
+  return [name, value];
+}
+
+// По имени, внутри имени — по порядку адреса: номер пары в сравнении, порядок не зависит от сортировки движка.
+function byName(left, right) {
+  if (left.pair[0] !== right.pair[0]) return left.pair[0] < right.pair[0] ? -1 : 1;
+  return left.index - right.index;
+}
+
+// Параметры списка в каноническом виде, как listQueryString сборки: имена по алфавиту, значения одного имени — по
+// порядку адреса. Нет параметров списка — ''.
+export function listArgs(args) {
+  const parts = String(args ?? '')
+    .split('&')
+    .filter((part) => part !== '');
+  const pairs = parts.map(listPair).filter((pair) => pair !== null);
+  const ordered = pairs.map((pair, index) => ({ pair, index })).sort(byName);
+  return ordered.map(({ pair }) => `${encodeURIComponent(pair[0])}=${encodeURIComponent(pair[1])}`).join('&');
+}
+
+// Адрес страницы N списка — …/page/N без «/» на конце, как у сборки (site-gen, Р11а-4); первая — адрес списка.
+export function pageLocation(uri, page) {
+  const base = uri.replace(PAGE_SUFFIX, '') || '/';
+  if (page === 1) return base;
+  return `${base === '/' ? '' : base}/page/${page}`;
+}
+
+// Строка таблицы и параметры запроса → что делать со страницей списка. null — обычный ответ строкой; page — только
+// номер страницы: 301 на страницу N, если она есть в таблице (это решает serve.js), иначе рисовальщик; draw —
+// рисовальщик с параметрами.
+export function listAnswer(row, args, uri) {
+  if (row.kind !== 'file' || row.l !== true) return null;
+  const list = listArgs(args);
+  if (list === '' || list.length > LIST_MAX) return null;
+  const only = ONLY_PAGE.exec(list);
+  if (only === null) return { kind: 'draw', list };
+  return { kind: 'page', location: pageLocation(uri, Number(only[1])), list };
+}
+
+// Запрос к рисовальщику (Св-1 В): магазин, сборка, путь и версии живой сборки — рисует только своей версией. list —
+// параметры списка в каноническом виде (блок 11, часть 11а-2): страница рисуется с ними и в список дорисовок не идёт.
+export function drawArgs(pointer, meta, path, list = '') {
   const query = [
     ['shop', pointer.shop],
     ['build', String(pointer.build)],
@@ -158,7 +230,8 @@ export function drawArgs(pointer, meta, path) {
     ['render', meta.versions.render],
     ['theme', meta.versions.theme],
   ];
-  return query.map(([name, value]) => `${name}=${encodeURIComponent(value)}`).join('&');
+  const withList = list === '' ? query : [...query, ['list', list]];
+  return withList.map(([name, value]) => `${name}=${encodeURIComponent(value)}`).join('&');
 }
 
 export const drawAnswer = (status) => DRAW_ANSWERS[status] ?? 'unavailable';
@@ -225,6 +298,10 @@ export default {
   isListed,
   drawArgs,
   drawAnswer,
+  LIST_MAX,
+  listArgs,
+  listAnswer,
+  pageLocation,
   drawnHeaders,
   notFoundUri,
   NEUTRAL_UNAVAILABLE,
