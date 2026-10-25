@@ -146,6 +146,15 @@ describe('промах', () => {
     expect(route.slashForm(uri)).toBe(form);
   });
 
+  it.each([
+    ['/catalog/page/2/', '/catalog/page/2'],
+    ['/products/scarf/', '/products/scarf'],
+    ['/products/scarf', null],
+    ['/', null],
+  ])('адрес %s — без слеша на конце: %s (приёмка блока 11: /page/N/ из плана)', (uri, form) => {
+    expect(route.noSlashForm(uri)).toBe(form);
+  });
+
   it('список дорисовок: строка адреса или null', () => {
     const list = { v: 1, rows: { '/products/osen/': ROW } };
     expect(route.drawnRow(list, '/products/osen/')).toEqual(ROW);
