@@ -1,5 +1,6 @@
 // Раздача витрин новых тем (design.md блока 5, В5-1 Б): метка хоста → указатель магазина → таблица раздачи его
-// живой сборки → файл по отпечатку, переезд (301) или удалённое (410). Промах — список дорисовок, потом список адресов
+// живой сборки → файл по отпечатку, переезд (301) или удалённое (410). Страница со списком с параметрами списка —
+// рисовальщик с ними (блок 11). Промах — список дорисовок, потом список адресов
 // сущностей (В5-7 Б): адрес есть — рисовальщик (Св-1 В), нет — 404. Решения — в route.js, здесь только ввод-вывод
 // nginx: подзапросы к кэшу хранилища (/_meta/, /_blob/) и к рисовальщику (/_draw), общая память (sf_routes), ответ.
 // Таблица сборки не меняется, поэтому её строки один раз раскладываются в общую память и дальше ищутся по одному ключу.
@@ -122,6 +123,21 @@ async function draw(r, pointer, meta) {
   send(r, 200, { ...headers, ...cspFor(r, meta, headers['Content-Type']) }, reply.responseText);
 }
 
+// Страница со списком с параметрами списка (блок 11 «Секций и SDK», часть 11а-2): только номер страницы и страница N есть
+// в сборке — 301 туда; иначе рисовальщик рисует страницу с параметрами (в список дорисовок она не идёт). Рисовальщик
+// занят, упал или не успел — файл сборки без параметров: покупатель видит список, модуль «Каталог» — что параметры не
+// применились (у страницы нет meta merfy-list). Такой страницы нет (номер больше последнего) — 404 страницей магазина.
+async function listed(r, served, list) {
+  const { pointer, prefix, meta, row } = served;
+  if (list.kind === 'page' && ROUTES.get(prefix + list.location) !== undefined) return r.return(301, list.location);
+  const reply = await r.subrequest('/_draw', { args: route.drawArgs(pointer, meta, r.uri, list.list) });
+  const answer = route.drawAnswer(reply.status);
+  if (answer === 'not-found') return sendPage(r, meta, answer);
+  if (answer === 'unavailable') return sendFile(r, route.fileAnswer(row, undefined), meta);
+  const headers = route.drawnHeaders(reply.headersOut['X-Merfy-Hash']);
+  send(r, 200, { ...headers, ...cspFor(r, meta, headers['Content-Type']) }, reply.responseText);
+}
+
 // Промах: адрес со «/» на конце есть — 301 туда; есть в списке дорисовок — файл; есть в списке адресов — рисуем.
 async function miss(r, pointer, prefix, meta) {
   const slash = route.slashForm(r.uri);
@@ -141,8 +157,12 @@ async function answer(r) {
   const meta = JSON.parse(ROUTES.get(prefix + route.META_KEY));
   const entry = ROUTES.get(prefix + r.uri);
   if (entry === undefined) return miss(r, pointer, prefix, meta);
+  const row = JSON.parse(entry);
+  // Страница со списком и параметры списка (блок 11, часть 11а-2) — страница N или рисовальщик.
+  const list = route.listAnswer(row, r.variables.args, r.uri);
+  if (list !== null) return listed(r, { pointer, prefix, meta, row }, list);
   const request = { ifNoneMatch: r.headersIn['If-None-Match'], args: r.variables.args, now: Date.now() };
-  return sendAnswer(r, meta, route.entryAnswer(JSON.parse(entry), request));
+  return sendAnswer(r, meta, route.entryAnswer(row, request));
 }
 
 async function serve(r) {
