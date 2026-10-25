@@ -276,3 +276,71 @@ describe('копия страницы 502 (блок 7 «Секций и SDK», �
     expect(JSON.parse(entries.at(-1)[1])).toEqual({ notFound: null, versions: TABLE.versions });
   });
 });
+
+describe('параметры списка (блок 11 «Секций и SDK», часть 11а-2)', () => {
+  const LIST_ROW = { kind: 'file', ...ROW, l: true };
+  const FILE_ROW = { kind: 'file', ...ROW };
+  const BLUE = '%D0%A1%D0%B8%D0%BD%D0%B8%D0%B9';
+
+  it('канонический вид: только параметры списка, имена по алфавиту, значения одного имени — по порядку адреса', () => {
+    expect(
+      route.listArgs(`utm_source=vk&sort=price_asc&filter.cvet=${BLUE}&filter.cvet=b&collection=len&yclid=1`),
+    ).toBe(`collection=len&filter.cvet=${BLUE}&filter.cvet=b&sort=price_asc`);
+    expect(route.listArgs('q=%D1%88%D0%B0%D1%80%D1%84+%D0%BB%D1%91%D0%BD')).toBe(
+      'q=%D1%88%D0%B0%D1%80%D1%84%20%D0%BB%D1%91%D0%BD',
+    );
+    expect(route.listArgs('')).toBe('');
+    expect(route.listArgs(undefined)).toBe('');
+    expect(route.listArgs('q=&filter.=x&sort=%E0%A4%A&page')).toBe('');
+  });
+
+  it('страница со списком: без параметров списка — обычный файл; с ними — рисовальщик', () => {
+    expect(route.listAnswer(LIST_ROW, '', '/catalog')).toBeNull();
+    expect(route.listAnswer(LIST_ROW, 'utm_source=vk&yclid=1', '/catalog')).toBeNull();
+    expect(route.listAnswer(LIST_ROW, 'sort=price_asc&q=x', '/catalog')).toEqual({
+      kind: 'draw',
+      list: 'q=x&sort=price_asc',
+    });
+    expect(route.listAnswer(LIST_ROW, `q=${'a'.repeat(route.LIST_MAX)}`, '/catalog')).toBeNull();
+  });
+
+  it('не страница со списком — параметры не важны', () => {
+    expect(route.listAnswer(FILE_ROW, 'sort=price_asc', '/o-nas')).toBeNull();
+    expect(route.listAnswer({ kind: 'moved', to: '/catalog' }, 'sort=price_asc', '/katalog')).toBeNull();
+    expect(
+      route.listAnswer({ kind: 'gone', until: '2027-01-01T00:00:00.000Z' }, 'page=2', '/collections/old'),
+    ).toBeNull();
+  });
+
+  it('только номер — адрес страницы N без «/» на конце; первая — адрес списка; у главной — /page/N', () => {
+    expect(route.listAnswer(LIST_ROW, 'page=2', '/catalog')).toEqual({
+      kind: 'page',
+      location: '/catalog/page/2',
+      list: 'page=2',
+    });
+    expect(route.listAnswer(LIST_ROW, 'page=1', '/catalog/page/3')).toMatchObject({ location: '/catalog' });
+    expect(route.listAnswer(LIST_ROW, 'page=4', '/collections/kashemir/page/2')).toMatchObject({
+      location: '/collections/kashemir/page/4',
+    });
+    expect(route.listAnswer(LIST_ROW, 'page=2', '/')).toMatchObject({ location: '/page/2' });
+    expect(route.listAnswer(LIST_ROW, 'page=1', '/page/2')).toMatchObject({ location: '/' });
+    expect(route.listAnswer(LIST_ROW, 'page=0', '/catalog')).toEqual({ kind: 'draw', list: 'page=0' });
+    expect(route.listAnswer(LIST_ROW, 'page=2&page=3', '/catalog')).toEqual({ kind: 'draw', list: 'page=2&page=3' });
+  });
+
+  it('рисовальщику — параметры списка аргументом list; без них — аргументы прежние', () => {
+    const meta = { notFound: null, versions: TABLE.versions };
+    const pointer = { shop: SHOP, build: 7 };
+    expect(route.drawArgs(pointer, meta, '/catalog', 'q=x&sort=price_asc')).toBe(
+      `${route.drawArgs(pointer, meta, '/catalog')}&list=q%3Dx%26sort%3Dprice_asc`,
+    );
+    expect(route.drawArgs(pointer, meta, '/catalog', '')).toBe(route.drawArgs(pointer, meta, '/catalog'));
+  });
+
+  it('строка файла: l — только true', () => {
+    const table = (l) => ({ ...TABLE, files: { '/catalog': { ...ROW, l } } });
+    expect(JSON.parse(route.tableEntries(table(true), 'p|')[0][1])).toEqual({ kind: 'file', ...ROW, l: true });
+    expect(() => route.tableEntries(table(false), 'p|')).toThrow('строка файла /catalog не формата v1');
+    expect(() => route.tableEntries(table(1), 'p|')).toThrow('строка файла /catalog не формата v1');
+  });
+});
