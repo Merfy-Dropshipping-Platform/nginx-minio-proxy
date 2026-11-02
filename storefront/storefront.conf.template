@@ -184,6 +184,9 @@ server {
         proxy_set_header Accept-Encoding "";
         proxy_cache sf_meta;
         proxy_cache_key $sf_object;
+        # Одна копия на объект: MinIO отвечает с Vary (Origin, Accept-Encoding), и копии по заголовкам покупателя
+        # обновлялись бы порознь — главная без Origin уже новой сборки, её скрипт с Origin ищется по старой (404).
+        proxy_ignore_headers Vary;
         proxy_cache_valid 200 404 1s;
         proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
         proxy_cache_lock on;
