@@ -28,6 +28,20 @@ services:
       interval: 2s
       retries: 30
 
+  # Задвижка (test/storage-gate.mjs): тест задерживает ответ хранилища на один объект — гонку переключения указателя
+  # стенд ставит руками, а не ловит таймерами. Остальные ответы идут насквозь. Управление — на 18083.
+  gate:
+    image: node:24-alpine
+    command: ["node", "/app/storage-gate.mjs"]
+    volumes: ["./test/storage-gate.mjs:/app/storage-gate.mjs:ro"]
+    ports: ["18083:8080"]
+    depends_on:
+      storage: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 2s
+      retries: 30
+
   renderer:
     image: node:24-alpine
     command: ["node", "/app/fake-renderer.mjs"]
@@ -43,7 +57,7 @@ services:
   proxy:
     build: .
     environment:
-      MINIO_URL: http://storage:9000
+      MINIO_URL: http://gate:9000
       BUCKET: merfy-sites
       RENDERER_URL: http://renderer:8080
       DRAW_TIMEOUT: 2s
@@ -56,7 +70,7 @@ services:
       INDEXNOW_KEY: 5f0c8a2d9e4b4c7a8d1e6f3b2a9c0d47
     ports: ["18081:80"]
     depends_on:
-      storage: { condition: service_healthy }
+      gate: { condition: service_healthy }
       renderer: { condition: service_healthy }
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1/health"]

@@ -75,21 +75,12 @@ server {
         return 200 "${INDEXNOW_KEY}";
     }
 
-    # Указатель и таблицы: кэш на секунду; хранилище недоступно — последняя копия из кэша.
-    location ~ ^/_meta/(?<sf_object>.+)$ {
+    # Указатель и таблицы — кэш в сервере на 127.0.0.1:8082 ниже: подзапросы njs фоновые, а фоновому nginx не отдаёт
+    # копию, пока запись обновляется (updating), — каждый идёт в хранилище сам.
+    location /_meta/ {
         internal;
-        proxy_pass ${MINIO_URL}/${BUCKET}/storefront/$sf_object;
+        proxy_pass http://127.0.0.1:8082;
         proxy_http_version 1.1;
-        # Подзапрос наследует Accept-Encoding покупателя, и MinIO отдаёт таблицу сжатой — JSON.parse в njs падает, раздача
-        # отвечает 503. Таблицы читает njs, сжатие им не нужно.
-        proxy_set_header Accept-Encoding "";
-        proxy_cache sf_meta;
-        proxy_cache_key $sf_object;
-        proxy_cache_valid 200 404 1s;
-        proxy_cache_use_stale error timeout http_500 http_502 http_503 http_504;
-        proxy_cache_lock on;
-        proxy_connect_timeout 2s;
-        proxy_read_timeout 2s;
     }
 
     # Файл сборки по отпечатку не меняется: кэш на месяц.
@@ -173,5 +164,30 @@ server {
         proxy_http_version 1.1;
         proxy_connect_timeout 1s;
         proxy_read_timeout ${DRAW_TIMEOUT};
+    }
+}
+
+# Указатель и таблицы: кэш на секунду; хранилище недоступно — последняя копия из кэша. Истёкшую запись обновляет один
+# запрос, остальные берут копию (updating): иначе поздний ответ со старым указателем затирает новый — сборки скачут.
+# Слушает только внутри контейнера, сюда ходит /_meta/.
+server {
+    listen 127.0.0.1:8082;
+    server_name _;
+    resolver 127.0.0.11 valid=30s ipv6=off;
+    resolver_timeout 2s;
+
+    location ~ ^/_meta/(?<sf_object>.+)$ {
+        proxy_pass ${MINIO_URL}/${BUCKET}/storefront/$sf_object;
+        proxy_http_version 1.1;
+        # Подзапрос наследует Accept-Encoding покупателя, и MinIO отдаёт таблицу сжатой — JSON.parse в njs падает, раздача
+        # отвечает 503. Таблицы читает njs, сжатие им не нужно.
+        proxy_set_header Accept-Encoding "";
+        proxy_cache sf_meta;
+        proxy_cache_key $sf_object;
+        proxy_cache_valid 200 404 1s;
+        proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
+        proxy_cache_lock on;
+        proxy_connect_timeout 2s;
+        proxy_read_timeout 2s;
     }
 }
