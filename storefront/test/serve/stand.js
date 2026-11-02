@@ -11,6 +11,7 @@ export const UPDATED_AT = '2026-10-06T09:00:00.000Z';
 const BUCKET = 'merfy-sites';
 const PROXY_PORT = 18081;
 const RENDERER_URL = 'http://127.0.0.1:18082';
+const GATE_URL = 'http://127.0.0.1:18083';
 // Указатель, таблицы и списки раздача держит в кэше «1s»: nginx считает срок в целых секундах, и ответ живёт до двух
 // секунд. После записи ждём дольше.
 export const META_CACHE_MS = 2100;
@@ -109,3 +110,29 @@ export async function seedCspShop({ files, notFound = null, csp, entities = [] }
 
 // Указатель не формата v1: раздача не может прочитать магазин — как сбой хранилища для этого магазина (часть 7а).
 export const breakPointer = (shop) => putJson(`pointers/${shop.label}.json`, { v: 2 });
+
+// Публикация: таблица новой сборки, потом указатель на неё — в том же порядке, что у сборщика.
+export async function publish(shop, build, files) {
+  const versions = { render: RENDER, theme: 'nova@0.0.1' };
+  const table = { v: 1, shop: shop.id, build, versions, notFound: null, files, moved: {}, gone: {} };
+  await putJson(`routes/${shop.id}/${build}.json`, table);
+  const pointer = { v: 1, shop: shop.id, build, newest: build, rev: build, paused: false, pending: null, history: [] };
+  await putJson(`pointers/${shop.label}.json`, pointer);
+}
+
+// Задвижка стенда (test/storage-gate.mjs): следующий ответ хранилища на указатель магазина задерживается, пока его не
+// отпустят. untilHeld — раздача за ним сходила, и ответ уже прочитан из хранилища.
+const gate = (path, method = 'GET') => fetch(`${GATE_URL}${path}`, { method });
+
+export const holdPointer = (shop) =>
+  gate(`/hold?path=${encodeURIComponent(`/${BUCKET}/storefront/pointers/${shop.label}.json`)}`, 'POST');
+
+export async function untilHeld() {
+  for (let tries = 0; tries < 100; tries += 1) {
+    if ((await (await gate('/held')).json()).held) return;
+    await wait(10);
+  }
+  throw new Error('задвижка: раздача не пришла за указателем');
+}
+
+export const releasePointer = () => gate('/release', 'POST');
