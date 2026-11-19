@@ -44,6 +44,16 @@ map $host $sf_everyone {
 limit_req_zone $arg_shop zone=sf_draw_shop:10m rate=${DRAW_RATE_SHOP};
 limit_req_zone $sf_everyone zone=sf_draw_all:1m rate=${DRAW_RATE_ALL};
 
+# Сжатие файлов делает прокси перед хранилищем (Traefik, middleware gzip у MinIO), и он выбирает кодировку по
+# Accept-Encoding покупателя: «gzip, deflate, br, zstd» браузера даёт gzip, одно «br» — Brotli. Поэтому в хранилище уходит
+# нормализованное значение: br, если покупатель принимает Brotli, иначе gzip, иначе пусто (без сжатия). Оно же — в ключе
+# кэша файлов: копий не больше трёх на файл, а не по одной на каждую строку заголовка браузера.
+map $http_accept_encoding $sf_ae {
+    "~*(^|[\\s,])br($|[\\s,;])"      br;
+    "~*(^|[\\s,])gzip($|[\\s,;])"    gzip;
+    default                          "";
+}
+
 server {
     listen 80;
     server_name _;
@@ -54,6 +64,13 @@ server {
     resolver_timeout 2s;
     # Таблица раздачи большого магазина приходит подзапросом целиком.
     subrequest_output_buffer_size 16m;
+
+    # HSTS на всех ответах (HTML, файлы, 304, 404, 503), без includeSubDomains и preload: у мерчантов свои домены, в том
+    # числе корневые, и includeSubDomains сломал бы им поддомены без https. Vary — кодировка файла зависит от
+    # Accept-Encoding. Наследование: add_header сервера не действует в location со своим add_header — в /_blob/ те же два
+    # заголовка повторены, при правке менять оба места.
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header Vary "Accept-Encoding" always;
 
     location = /health {
         return 200 "ok\n";
@@ -67,6 +84,15 @@ server {
 
     location / {
         js_content serve.serve;
+        # Страницы, которые njs отдаёт сам (рисовальщик, страница 404 темы, 503), хранилище не сжимает: Brotli в образе
+        # нет, поэтому gzip. Файлы сборки сюда не попадают — внутренний переход в /_blob/ меняет location, они приходят
+        # из хранилища уже сжатыми.
+        gzip on;
+        gzip_comp_level 5;
+        gzip_min_length 256;
+        # «*», а не список типов: Content-Type, который njs ставит через headersOut, фильтр gzip по списку не узнаёт
+        # (проверено: с text/html и text/plain ответ уходил без сжатия), а здесь других ответов, кроме страниц, нет.
+        gzip_types *;
     }
 
     # Файл ключа IndexNow — на любом хосте (design.md, раздел 4); уведомления шлёт сборщик (блок 6).
@@ -88,8 +114,11 @@ server {
         internal;
         proxy_pass ${MINIO_URL}/${BUCKET}/storefront/blobs/$sf_blob;
         proxy_http_version 1.1;
+        # Кодировка — по нормализованному Accept-Encoding (map $sf_ae выше): Brotli, gzip или без сжатия; копия в кэше
+        # своя на каждую. Vary хранилища (Origin, Accept-Encoding) ниже прячется; Vary для покупателя — add_header.
+        proxy_set_header Accept-Encoding $sf_ae;
         proxy_cache sf_blobs;
-        proxy_cache_key $sf_blob;
+        proxy_cache_key $sf_blob:$sf_ae;
         proxy_cache_valid 200 30d;
         proxy_cache_use_stale error timeout http_500 http_502 http_503 http_504;
         proxy_connect_timeout 2s;
@@ -105,6 +134,9 @@ server {
         proxy_hide_header Vary;
         proxy_hide_header X-Ratelimit-Limit;
         proxy_hide_header X-Ratelimit-Remaining;
+        # Свой add_header в location отключает серверные — повтор HSTS и Vary (см. выше).
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        add_header Vary "Accept-Encoding" always;
         proxy_intercept_errors on;
         error_page 403 404 500 502 503 504 = @unavailable;
         js_header_filter serve.fileHeaders;
