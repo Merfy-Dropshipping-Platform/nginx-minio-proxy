@@ -161,9 +161,24 @@ export function isListed(list, uri) {
 // Параметры списка (блок 11 «Секций и SDK», часть 11а-2; design.md блока 11, 11.4): страница со списком (строка файла с
 // l: true) с параметрами списка рисуется по запросу — их выбирает покупатель фильтрами каталога. Имена — те, что
 // принимает шлюз (site-gen, packages/storefront-build/src/list-query.ts); filter.<ключ группы> — по началу имени. Чужие
-// параметры (utm_source, yclid…) рисовальщика не зовут: обычный файл сборки.
-const LIST_NAMES = ['availability', 'collection', 'max_price', 'min_price', 'page', 'q', 'sort'];
-const LIST_FILTER_PREFIX = 'filter.';
+// параметры (utm_source, yclid…) рисовальщика не зовут: обычный файл сборки. Фильтры каталога, часть 1 (21.11): теги
+// (tag), признаки (badge) и их пороги (min_discount, new_days, low_stock_max). Список — тот же, что LIST_PARAM_NAMES
+// сборки; обе стороны сверяют test/list-canonical.json (копия packages/storefront-build/fixtures/list-canonical.json).
+export const LIST_NAMES = [
+  'availability',
+  'badge',
+  'collection',
+  'low_stock_max',
+  'max_price',
+  'min_discount',
+  'min_price',
+  'new_days',
+  'page',
+  'q',
+  'sort',
+  'tag',
+];
+export const LIST_FILTER_PREFIX = 'filter.';
 // Длиннее — файл сборки без параметров: ключ кеша рисовальщика не растёт без предела.
 export const LIST_MAX = 2048;
 const ONLY_PAGE = /^page=([1-9][0-9]{0,5})$/;
@@ -306,6 +321,8 @@ export default {
   drawArgs,
   drawAnswer,
   LIST_MAX,
+  LIST_NAMES,
+  LIST_FILTER_PREFIX,
   listArgs,
   listAnswer,
   pageLocation,

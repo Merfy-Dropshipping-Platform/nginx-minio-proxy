@@ -1,0 +1,40 @@
+{
+  "about": "Канонический вид параметров списка — ключ кеша рендера по запросу. Один и тот же файл лежит в site-gen (packages/storefront-build/fixtures/list-canonical.json, сверяет listQueryString сборки) и в nginx-minio-proxy (storefront/test/list-canonical.json, сверяет listArgs раздачи). Меняются вместе, копии одинаковые. Случаи — только с допустимыми значениями без повторов: на мусоре раздача и сборка расходятся намеренно (раздача не знает пределов).",
+  "names": [
+    "availability",
+    "badge",
+    "collection",
+    "low_stock_max",
+    "max_price",
+    "min_discount",
+    "min_price",
+    "new_days",
+    "page",
+    "q",
+    "sort",
+    "tag"
+  ],
+  "filterPrefix": "filter.",
+  "cases": [
+    {
+      "args": "sort=price_asc&filter.cvet=b&filter.cvet=a&collection=len",
+      "canonical": "collection=len&filter.cvet=b&filter.cvet=a&sort=price_asc"
+    },
+    {
+      "args": "utm_source=vk&tag=leto&badge=sale&tag=hlopok&badge=new&yclid=1",
+      "canonical": "badge=sale&badge=new&tag=leto&tag=hlopok"
+    },
+    {
+      "args": "min_discount=20&low_stock_max=3&new_days=14&badge=low_stock&badge=new",
+      "canonical": "badge=low_stock&badge=new&low_stock_max=3&min_discount=20&new_days=14"
+    },
+    {
+      "args": "page=2&tag=%D0%BB%D0%B5%D1%82%D0%BE&max_price=3000&min_price=500&availability=in_stock&q=%D1%88%D0%B0%D1%80%D1%84",
+      "canonical": "availability=in_stock&max_price=3000&min_price=500&page=2&q=%D1%88%D0%B0%D1%80%D1%84&tag=%D0%BB%D0%B5%D1%82%D0%BE"
+    },
+    {
+      "args": "filter.razmer=M&badge=in_stock&badge=preorder&collection=kashemir&min_discount=5&tag=a&filter.cvet=x",
+      "canonical": "badge=in_stock&badge=preorder&collection=kashemir&filter.cvet=x&filter.razmer=M&min_discount=5&tag=a"
+    }
+  ]
+}

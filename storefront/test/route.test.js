@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import route from '../njs/route.js';
+import canonicalCases from './list-canonical.json';
 
 const SHOP = '00000000-0000-4000-8000-000000000001';
 const HASH = 'a'.repeat(64);
@@ -301,6 +302,17 @@ describe('параметры списка (блок 11 «Секций и SDK», 
     expect(route.listArgs('')).toBe('');
     expect(route.listArgs(undefined)).toBe('');
     expect(route.listArgs('q=&filter.=x&sort=%E0%A4%A&page')).toBe('');
+  });
+
+  // Ключ кеша рисовальщика: раздача и сборка (site-gen, listQueryString) дают одну строку. Тот же файл случаев — в
+  // site-gen, packages/storefront-build/fixtures/list-canonical.json.
+  it('имена параметров — те же, что LIST_PARAM_NAMES сборки (фильтры каталога: tag, badge и пороги)', () => {
+    expect(route.LIST_NAMES).toEqual(canonicalCases.names);
+    expect(route.LIST_FILTER_PREFIX).toBe(canonicalCases.filterPrefix);
+  });
+
+  it.each(canonicalCases.cases)('канонический вид как у сборки: $args', ({ args, canonical }) => {
+    expect(route.listArgs(args)).toBe(canonical);
   });
 
   it('страница со списком: без параметров списка — обычный файл; с ними — рисовальщик', () => {
